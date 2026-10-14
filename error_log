@@ -1,0 +1,5 @@
+[06-Jul-2026 22:07:06 Asia/Jakarta] PHP Fatal error:  Uncaught mysqli_sql_exception: Access denied for user 'ISI_USERNAME_DATABASE_ANDA'@'localhost' (using password: YES) in /home/bald6243/public_html/booking.baleody.id/api.php:13
+Stack trace:
+#0 /home/bald6243/public_html/booking.baleody.id/api.php(13): mysqli->__construct()
+#1 {main}
+  thrown in /home/bald6243/public_html/booking.baleody.id/api.php on line 13

@@ -1,0 +1,2730 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title id="browser-title">Bale Ody Villa & Camping Ground - Dashboard Kasir & Booking</title>
+    <!-- Dynamic Favicon Placeholder -->
+    <link id="dynamic-favicon" rel="icon" type="image/x-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22 width=%22100%22 height=%22100%22><rect width=%22100%22 height=%22100%22 rx=%2220%22 fill=%22%23065f46%22/><text y=%2270%22 x=%2220%22 font-family=%22sans-serif%22 font-size=%2260%22 fill=%22%23ffffff%22 font-weight=%22bold%22>V</text></svg>">
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts (Inter) -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #c5a880; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #a98d65; }
+
+        #sidebar { transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        #sidebar.collapsed .sidebar-text,
+        #sidebar.collapsed .sidebar-brand,
+        #sidebar.collapsed .sidebar-profile { display: none; }
+        #sidebar.collapsed .nav-item { justify-content: center; padding-left: 0; padding-right: 0; }
+        #sidebar.collapsed .nav-item span { display: none; }
+        #sidebar.collapsed .nav-item i { margin-right: 0; font-size: 1.25rem; }
+        
+        /* Smooth collapse for public monitor details */
+        .details-content {
+            transition: max-height 0.3s ease-in-out, opacity 0.3s ease-in-out, margin 0.3s ease-in-out, padding 0.3s ease-in-out;
+            max-height: 0;
+            opacity: 0;
+            overflow: hidden;
+        }
+        .details-content.open {
+            max-height: 500px; /* Adjust as needed */
+            opacity: 1;
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top-width: 1px;
+        }
+        .details-toggle i {
+            transition: transform 0.3s ease;
+        }
+        .details-toggle.open i {
+            transform: rotate(180deg);
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col justify-between">
+
+<script>
+    // --- STATE MANAGEMENT ---
+    let villas = [];
+    let bookings = [];
+    let accounts = [];
+    let settings = {
+        villaName: "Bale Ody Villa & Camping Ground",
+        villaLogo: "",
+        villaFavicon: ""
+    };
+    
+    let currentUser = null;
+    let sidebarCollapsed = false;
+
+    // Helper functions for Date list generation
+    function getDatesInRange(startDateStr, endDateStr) {
+        const dates = [];
+        let curr = new Date(startDateStr);
+        const end = new Date(endDateStr);
+        while (curr < end) {
+            dates.push(curr.toISOString().split('T')[0]);
+            curr.setDate(curr.getDate() + 1);
+        }
+        return dates;
+    }
+
+    // Calculate Villa availability for specific dates
+    function calculateStockMatrix(startDateStr, endDateStr, excludeBookingId = null) {
+        const dates = getDatesInRange(startDateStr, endDateStr);
+        const matrix = {};
+
+        dates.forEach(date => {
+            matrix[date] = {};
+            villas.forEach(v => {
+                matrix[date][v.id] = {
+                    name: v.name,
+                    total: parseInt(v.stock),
+                    used: 0,
+                    remaining: parseInt(v.stock)
+                };
+            });
+        });
+
+        bookings.forEach(booking => {
+            if (excludeBookingId && booking.id === excludeBookingId) return;
+
+            const bDates = getDatesInRange(booking.checkIn, booking.checkOut);
+            bDates.forEach(bDate => {
+                if (matrix[bDate]) {
+                    booking.items.forEach(item => {
+                        if (matrix[bDate][item.villaId]) {
+                            matrix[bDate][item.villaId].used += parseInt(item.qty);
+                            matrix[bDate][item.villaId].remaining = Math.max(0, matrix[bDate][item.villaId].total - matrix[bDate][item.villaId].used);
+                        }
+                    });
+                }
+            });
+        });
+
+        return matrix;
+    }
+
+    // Direct check if a specific villa setup is available
+    function isStockAvailable(villaId, qty, checkIn, checkOut, excludeBookingId = null) {
+        if (!checkIn || !checkOut || new Date(checkIn) >= new Date(checkOut)) return false;
+        const matrix = calculateStockMatrix(checkIn, checkOut, excludeBookingId);
+        
+        for (const date in matrix) {
+            const villaStock = matrix[date][villaId];
+            if (!villaStock || (villaStock.remaining < qty)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Toggles the detail section in public monitor
+    function togglePublicDetails(bookingId) {
+        const content = document.getElementById(`details-content-${bookingId}`);
+        const btn = document.getElementById(`details-btn-${bookingId}`);
+        if(content && btn) {
+            content.classList.toggle('open');
+            btn.classList.toggle('open');
+        }
+    }
+</script>
+
+<div id="app-container" class="min-h-screen flex flex-col">
+
+    <!-- LOGIN PAGE VIEW WITH PUBLIC MONITOR -->
+    <div id="login-view" class="flex-1 flex items-center justify-center p-4 bg-gradient-to-tr from-slate-200 via-slate-100 to-slate-200 overflow-y-auto">
+        <div class="max-w-6xl w-full grid grid-cols-1 lg:grid-cols-12 gap-8 my-8">
+            
+            <!-- LEFT: Public Monitor Panel -->
+            <div class="lg:col-span-7 bg-white shadow-xl rounded-3xl p-8 border border-slate-200 flex flex-col justify-between">
+                <div>
+                    <div class="flex items-center justify-between mb-6 border-b border-slate-100 pb-4">
+                        <div class="flex items-center gap-3">
+                            <span class="p-2.5 bg-slate-100 text-slate-800 rounded-xl"><i class="fa-solid fa-calendar-days text-xl"></i></span>
+                            <div>
+                                <h2 class="text-lg font-bold text-slate-900">Agenda Reservasi (Bulan Ini)</h2>
+                                <p class="text-xs text-slate-500">Pantau jadwal pengunjung aktif di bulan berjalan</p>
+                            </div>
+                        </div>
+                        <span id="public-month-badge" class="px-3 py-1 bg-emerald-50 text-emerald-700 font-bold text-xs rounded-full border border-emerald-200">Bulan Ini</span>
+                    </div>
+                    
+                    <div id="public-7-days-monitor" class="space-y-4 max-h-[60vh] overflow-y-auto pr-1 pb-4">
+                        <!-- Populated dynamically on page load -->
+                    </div>
+                </div>
+                <div class="text-[11px] text-slate-400 mt-6 border-t border-slate-100 pt-3 text-center lg:text-left">
+                    * Hubungi Admin Bale Ody jika Anda ingin memodifikasi atau memesan kamar baru.
+                </div>
+            </div>
+
+            <!-- RIGHT: Login Box -->
+            <div class="lg:col-span-5 bg-white shadow-2xl rounded-3xl p-8 border border-slate-200/50 flex flex-col justify-center h-fit self-center">
+                <div class="text-center mb-8">
+                    <!-- Brand Logo -->
+                    <div class="inline-flex mb-3" id="login-logo-container">
+                        <div class="p-3 bg-emerald-50 text-emerald-600 rounded-2xl">
+                            <i class="fa-solid fa-hotel text-3xl"></i>
+                        </div>
+                    </div>
+                    <h1 class="text-2xl font-bold text-slate-950 dynamic-villa-name">Bale Ody Villa & Camping Ground</h1>
+                    <p class="text-sm text-slate-500 mt-1">Sistem Dashboard Management</p>
+                </div>
+
+                <div id="login-alert" class="hidden mb-4 p-3 bg-red-50 border border-red-200 text-red-600 text-sm rounded-xl flex items-center gap-2">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                    <span id="login-alert-msg">Username atau Password salah!</span>
+                </div>
+
+                <form id="login-form" onsubmit="handleLogin(event)" class="space-y-5">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-2">Username</label>
+                        <div class="relative">
+                            <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400">
+                                <i class="fa-regular fa-user"></i>
+                            </span>
+                            <input type="text" id="login-username" required class="w-full pl-10 pr-4 py-3 bg-slate-100 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-800 transition-all placeholder:text-slate-400" placeholder="admin">
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-2">Password</label>
+                        <div class="relative">
+                            <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400">
+                                <i class="fa-solid fa-lock"></i>
+                            </span>
+                            <input type="password" id="login-password" required class="w-full pl-10 pr-10 py-3 bg-slate-100 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-800 transition-all placeholder:text-slate-400" placeholder="••••••••">
+                            <button type="button" onclick="togglePasswordVisibility('login-password')" class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600">
+                                <i class="fa-regular fa-eye" id="login-password-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="w-full py-3.5 bg-gradient-to-r from-emerald-800 to-emerald-700 hover:from-emerald-700 hover:to-emerald-600 text-white font-semibold rounded-xl shadow-lg shadow-emerald-900/10 transition-all transform active:scale-[0.98] mt-2">
+                        Masuk ke Dashboard <i class="fa-solid fa-arrow-right ml-2 text-sm"></i>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN INTERFACES -->
+    <div id="main-view" class="hidden flex-1 flex flex-col md:flex-row min-h-screen">
+        
+        <!-- SIDEBAR -->
+        <aside id="sidebar" class="bg-emerald-950 text-slate-200 w-full md:w-72 flex flex-col border-r border-emerald-900/50 shrink-0">
+            <!-- Header Brand -->
+            <div class="p-6 border-b border-emerald-900/70 flex items-center justify-between">
+                <div class="flex items-center gap-3 sidebar-brand overflow-hidden">
+                    <div id="sidebar-logo-container" class="shrink-0">
+                        <div class="p-2.5 bg-amber-500/15 text-amber-400 rounded-xl">
+                            <i class="fa-solid fa-hotel text-xl"></i>
+                        </div>
+                    </div>
+                    <div class="min-w-0">
+                        <h2 class="font-bold text-white text-base leading-tight truncate dynamic-villa-name">Bale Ody Villa & Camping Ground</h2>
+                        <span class="text-xs text-emerald-400/80 tracking-wider">KASIR & ADMIN</span>
+                    </div>
+                </div>
+                <button id="sidebar-toggle" onclick="toggleSidebar()" class="hidden md:flex p-2 rounded-xl bg-emerald-900/50 hover:bg-emerald-900 text-emerald-400 hover:text-white transition-all shrink-0">
+                    <i class="fa-solid fa-angles-left"></i>
+                </button>
+            </div>
+
+            <!-- Profile Widget -->
+            <div class="p-4 mx-4 my-3 bg-emerald-900/30 rounded-xl flex items-center gap-3 border border-emerald-800/20 sidebar-profile">
+                <div class="w-10 h-10 rounded-full bg-amber-50 flex items-center justify-center font-bold text-white shadow shrink-0">
+                    <i class="fa-solid fa-user-shield"></i>
+                </div>
+                <div class="overflow-hidden">
+                    <p class="text-xs text-emerald-300 font-semibold uppercase tracking-wider" id="current-role-display">Super Admin</p>
+                    <p class="text-sm font-semibold text-white truncate" id="current-user-display">Administrator</p>
+                </div>
+            </div>
+
+            <!-- Navigations -->
+            <nav class="flex-1 px-4 py-3 space-y-1.5 overflow-y-auto">
+                <button onclick="switchTab('dashboard')" id="nav-dashboard" class="nav-item w-full flex items-center gap-3.5 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 hover:bg-emerald-900/50 hover:text-white text-emerald-100">
+                    <i class="fa-solid fa-circle-plus text-base text-emerald-400 shrink-0"></i>
+                    <span class="sidebar-text">Buat Booking Baru</span>
+                </button>
+
+                <button onclick="switchTab('reservasi')" id="nav-reservasi" class="nav-item w-full flex items-center gap-3.5 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 hover:bg-emerald-900/50 hover:text-white text-emerald-100">
+                    <i class="fa-solid fa-calendar-check text-base text-emerald-400 shrink-0"></i>
+                    <span class="sidebar-text">Database Reservasi</span>
+                </button>
+
+                <button onclick="switchTab('stok')" id="nav-stok" class="nav-item w-full flex items-center gap-3.5 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 hover:bg-emerald-900/50 hover:text-white text-emerald-100">
+                    <i class="fa-solid fa-boxes-stacked text-base text-emerald-400 shrink-0"></i>
+                    <span class="sidebar-text">Edit Stok & Jenis Villa</span>
+                </button>
+
+                <button onclick="switchTab('keuangan')" id="nav-keuangan" class="nav-item w-full flex items-center gap-3.5 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 hover:bg-emerald-900/50 hover:text-white text-emerald-100">
+                    <i class="fa-solid fa-chart-line text-base text-emerald-400 shrink-0"></i>
+                    <span class="sidebar-text">Laporan Keuangan</span>
+                </button>
+
+                <button onclick="switchTab('akun')" id="nav-akun" class="nav-item w-full flex items-center gap-3.5 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 hover:bg-emerald-900/50 hover:text-white text-emerald-100">
+                    <i class="fa-solid fa-user-gear text-base text-emerald-400 shrink-0"></i>
+                    <span class="sidebar-text">Akun & Identitas</span>
+                </button>
+            </nav>
+
+            <div class="p-4 border-t border-emerald-900/70">
+                <button onclick="handleLogout()" class="w-full py-2.5 bg-red-900/30 hover:bg-red-800/40 text-red-200 hover:text-red-100 font-medium rounded-xl text-sm flex items-center justify-center gap-2 border border-red-900/50 transition-all">
+                    <i class="fa-solid fa-power-off text-sm"></i>
+                    <span class="sidebar-text">Logout Sesi</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- VIEWPORTS -->
+        <main class="flex-1 flex flex-col min-w-0 overflow-y-auto">
+            <!-- TOP BAR -->
+            <header class="bg-white border-b border-slate-100 px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-4 shrink-0">
+                <div>
+                    <h1 class="text-xl font-bold text-slate-800" id="current-tab-title">Sistem Booking</h1>
+                    <p class="text-xs text-slate-400" id="current-tab-desc">Input pesanan kasir dan verifikasi kamar</p>
+                </div>
+                <!-- Connectivity Indicator -->
+                <div class="flex items-center gap-4">
+                    <div id="connection-badge" class="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" id="badge-dot"></span>
+                        <span id="connection-status">Terkoneksi ke Database MySQL</span>
+                    </div>
+                    <div class="text-slate-500 text-sm font-medium" id="clock-display"></div>
+                </div>
+            </header>
+
+            <!-- CONTENT CONTAINER -->
+            <div class="p-6 max-w-7xl w-full mx-auto space-y-6 flex-1">
+
+                <!-- TAB: NEW BOOKING -->
+                <section id="tab-dashboard" class="tab-content space-y-6">
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        
+                        <!-- Form Area -->
+                        <div class="lg:col-span-2 space-y-6">
+                            <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+                                <div class="flex items-center justify-between border-b border-slate-100 pb-4 mb-5">
+                                    <h3 class="font-bold text-slate-800 flex items-center gap-2 text-lg">
+                                        <i class="fa-regular fa-id-card text-emerald-600"></i>
+                                        Formulir Pemesanan Baru
+                                    </h3>
+                                    <span class="text-xs bg-emerald-50 text-emerald-700 font-semibold px-2.5 py-1 rounded-full">Langkah 1 dari 2</span>
+                                </div>
+
+                                <form id="booking-form" onsubmit="submitNewBooking(event)" class="space-y-6">
+                                    
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Nama Pemesan <span class="text-red-500">*</span></label>
+                                            <input type="text" id="b-cust-name" required class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-slate-800 text-sm" placeholder="Contoh: Bapak Gunawan">
+                                        </div>
+                                        <div class="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Check In <span class="text-red-500">*</span></label>
+                                                <input type="date" id="b-checkin" required onchange="handleDatesChanged()" class="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-slate-800 text-xs">
+                                            </div>
+                                            <div>
+                                                <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Check Out <span class="text-red-500">*</span></label>
+                                                <input type="date" id="b-checkout" required onchange="handleDatesChanged()" class="w-full px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-slate-800 text-xs">
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="border-t border-slate-100 pt-5">
+                                        <div class="flex justify-between items-center mb-4">
+                                            <label class="block text-xs font-bold text-slate-600 uppercase tracking-wider">
+                                                <i class="fa-solid fa-bed mr-1 text-slate-400"></i> Pilihan Villa / Room
+                                            </label>
+                                            <button type="button" onclick="addVillaRow()" class="text-xs text-emerald-600 hover:text-emerald-700 font-semibold flex items-center gap-1 bg-emerald-50 hover:bg-emerald-100/70 px-3 py-1.5 rounded-lg transition-all">
+                                                <i class="fa-solid fa-plus-circle"></i> Tambah Villa
+                                            </button>
+                                        </div>
+                                        <div id="villa-rows-container" class="space-y-3"></div>
+                                    </div>
+
+                                    <div class="border-t border-slate-100 pt-5">
+                                        <div class="flex justify-between items-center mb-4">
+                                            <label class="block text-xs font-bold text-slate-600 uppercase tracking-wider">
+                                                <i class="fa-solid fa-bell-concierge mr-1 text-slate-400"></i> Add-on (Layanan Tambahan)
+                                            </label>
+                                            <button type="button" onclick="addAddonRow()" class="text-xs text-amber-600 hover:text-amber-700 font-semibold flex items-center gap-1 bg-amber-50 hover:bg-amber-100/70 px-3 py-1.5 rounded-lg transition-all">
+                                                <i class="fa-solid fa-plus-circle"></i> Tambah Add-on
+                                            </button>
+                                        </div>
+                                        <div id="addon-rows-container" class="space-y-3"></div>
+                                    </div>
+
+                                    <div class="border-t border-slate-100 pt-5 grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <div>
+                                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Potongan Diskon (Rp)</label>
+                                            <div class="relative">
+                                                <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400 text-sm font-semibold">Rp</span>
+                                                <input type="number" id="b-discount" oninput="calculateTotalSummary()" class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-slate-800 text-sm" placeholder="0" value="0" min="0">
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Uang Muka / DP (Rp)</label>
+                                            <div class="relative">
+                                                <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400 text-sm font-semibold">Rp</span>
+                                                <input type="number" id="b-dp" oninput="calculateTotalSummary()" class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-slate-800 text-sm" placeholder="0" value="0" min="0">
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Metode Bayar DP</label>
+                                            <select id="b-dp-method" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-slate-800 text-sm font-medium">
+                                                <option value="None">Pilih Metode</option>
+                                                <option value="Cash">Cash</option>
+                                                <option value="Transfer">Transfer</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <div class="pt-4 border-t border-slate-100 flex justify-end gap-3">
+                                        <button type="button" onclick="resetBookingForm()" class="px-5 py-3 border border-slate-200 hover:bg-slate-50 text-slate-600 font-semibold rounded-xl text-sm transition-all">
+                                            Reset Formulir
+                                        </button>
+                                        <button type="submit" class="px-7 py-3 bg-emerald-800 hover:bg-emerald-700 text-white font-semibold rounded-xl text-sm shadow-md transition-all">
+                                            Simpan Transaksi <i class="fa-regular fa-circle-check ml-1.5"></i>
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+
+                        <!-- Real-time Stocks & Price Summary Info (Right Panel) -->
+                        <div class="space-y-6">
+                            
+                            <!-- LIVE AVAILABILITY -->
+                            <div class="bg-slate-900 text-slate-100 rounded-2xl shadow-xl p-6 border border-emerald-500/15 relative overflow-hidden">
+                                <div class="absolute -right-12 -top-12 w-28 h-28 bg-emerald-500/5 rounded-full blur-xl"></div>
+                                <h3 class="font-bold text-white mb-3 text-base flex items-center gap-2">
+                                    <i class="fa-solid fa-magnifying-glass-chart text-amber-400"></i>
+                                    Status Ketersediaan Stok
+                                </h3>
+                                <p class="text-xs text-slate-400 mb-4">Mendeteksi sisa kapasitas villa kosong pada periode tanggal yang Anda input di atas.</p>
+                                
+                                <div class="bg-slate-800/60 border border-slate-700/50 rounded-xl p-3 mb-4">
+                                    <div class="grid grid-cols-2 gap-2 text-xs">
+                                        <div>
+                                            <p class="text-slate-500">Check-In</p>
+                                            <p class="font-bold text-slate-200" id="live-ci-display">-</p>
+                                        </div>
+                                        <div>
+                                            <p class="text-slate-500">Check-Out</p>
+                                            <p class="font-bold text-slate-200" id="live-co-display">-</p>
+                                        </div>
+                                    </div>
+                                    <div class="text-[11px] text-amber-300 font-semibold mt-2 pt-2 border-t border-slate-700/40 text-center" id="live-nights-display">
+                                        Masukkan Tanggal yang valid
+                                    </div>
+                                </div>
+
+                                <div id="live-stock-monitor" class="space-y-2.5 max-h-[220px] overflow-y-auto pr-1">
+                                    <p class="text-slate-500 text-xs text-center py-4">Silakan tentukan tanggal booking terlebih dahulu untuk melihat ketersediaan stok.</p>
+                                </div>
+                            </div>
+
+                            <!-- LIVE PRICE SUMMARY CARD -->
+                            <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+                                <h3 class="font-bold text-slate-800 border-b border-slate-100 pb-3 mb-4 text-base flex items-center gap-2">
+                                    <i class="fa-solid fa-receipt text-amber-600"></i>
+                                    Rincian Kwitansi Kasir
+                                </h3>
+
+                                <div class="space-y-3.5 text-sm" id="invoice-details-box">
+                                    <div class="flex justify-between">
+                                        <span class="text-slate-500">Total Harga Kamar</span>
+                                        <span class="font-semibold text-slate-800" id="inv-villa-total">Rp 0</span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span class="text-slate-500">Total Add-ons</span>
+                                        <span class="font-semibold text-slate-800" id="inv-addon-total">Rp 0</span>
+                                    </div>
+                                    <div class="flex justify-between text-rose-500" id="inv-discount-row">
+                                        <span>Potongan Diskon</span>
+                                        <span class="font-semibold" id="inv-discount-total">- Rp 0</span>
+                                    </div>
+                                    <div class="border-t border-slate-100 pt-3 flex justify-between font-bold text-base text-slate-900">
+                                        <span>Grand Total</span>
+                                        <span id="inv-grand-total" class="text-emerald-700">Rp 0</span>
+                                    </div>
+                                    <div class="flex justify-between text-xs text-emerald-600 font-medium">
+                                        <span>DP Terbayar</span>
+                                        <span id="inv-dp-total">Rp 0</span>
+                                    </div>
+                                    <div class="border-t border-dashed border-slate-200 pt-3 flex justify-between font-bold text-slate-900">
+                                        <span class="text-slate-500 text-xs uppercase tracking-wider self-center">Sisa Tagihan</span>
+                                        <span id="inv-remaining-total" class="text-lg text-amber-600">Rp 0</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB: FILTER RESERVASI -->
+                <section id="tab-reservasi" class="tab-content hidden space-y-6">
+                    <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+                        <div class="flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4 border-b border-slate-100 pb-5 mb-6">
+                            <div>
+                                <h3 class="font-bold text-slate-800 text-lg flex items-center gap-2">
+                                    <i class="fa-solid fa-list-check text-emerald-600"></i>
+                                    Database Reservasi
+                                </h3>
+                                <p class="text-xs text-slate-500 mt-1">Lacak dan kelola data tamu berdasarkan periode. Diurutkan dari tanggal check-in.</p>
+                            </div>
+                            
+                            <div class="flex flex-wrap items-center gap-3 w-full xl:w-auto">
+                                <div class="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
+                                    <button onclick="setResPeriodFilter('hari')" id="btn-res-hari" class="res-period-btn px-3.5 py-2 text-xs font-semibold rounded-lg bg-white text-emerald-800 shadow-sm">Hari Ini</button>
+                                    <button onclick="setResPeriodFilter('minggu')" id="btn-res-minggu" class="res-period-btn px-3.5 py-2 text-xs font-semibold rounded-lg text-slate-600 hover:text-slate-800">Mingguan</button>
+                                    <button onclick="setResPeriodFilter('bulan')" id="btn-res-bulan" class="res-period-btn px-3.5 py-2 text-xs font-semibold rounded-lg text-slate-600 hover:text-slate-800">Bulanan</button>
+                                    <button onclick="setResPeriodFilter('kustom')" id="btn-res-kustom" class="res-period-btn px-3.5 py-2 text-xs font-semibold rounded-lg text-slate-600 hover:text-slate-800">Kustom</button>
+                                </div>
+
+                                <div class="flex items-center gap-2 text-sm w-full md:w-auto">
+                                    <input type="date" id="res-start-date" onchange="loadFilteredReservations()" class="px-3 py-2 border border-slate-200 bg-slate-50 text-slate-700 rounded-xl text-xs">
+                                    <span class="text-slate-400 text-xs">s/d</span>
+                                    <input type="date" id="res-end-date" onchange="loadFilteredReservations()" class="px-3 py-2 border border-slate-200 bg-slate-50 text-slate-700 rounded-xl text-xs">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="reservasi-container" class="space-y-4 mb-8">
+                            <!-- Populated with sorted lists -->
+                        </div>
+
+                        <div class="border-t border-slate-100 pt-6 mt-6">
+                            <div class="flex items-center gap-2 mb-4">
+                                <span class="p-2 bg-amber-50 text-amber-600 rounded-lg"><i class="fa-solid fa-calendar-days"></i></span>
+                                <div>
+                                    <h4 class="font-bold text-slate-800 text-base">Pantau Agenda Keterisian Kamar Berdasarkan Tanggal Awal Filter</h4>
+                                    <p class="text-xs text-slate-400">Menampilkan daftar tamu pada tanggal-tanggal yang terisi dalam bulan pilihan filter Anda.</p>
+                                </div>
+                            </div>
+                            
+                            <div id="monthly-agenda-monitor-container" class="space-y-4">
+                                <!-- Populated dynamically -->
+                            </div>
+                        </div>
+
+                    </div>
+                </section>
+
+                <!-- TAB: EDIT STOK & JENIS VILLA -->
+                <section id="tab-stok" class="tab-content hidden space-y-6">
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        
+                        <div class="lg:col-span-2 space-y-4">
+                            <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+                                <div class="border-b border-slate-100 pb-4 mb-5 flex justify-between items-center">
+                                    <h3 class="font-bold text-slate-800 text-lg flex items-center gap-2">
+                                        <i class="fa-solid fa-boxes-stacked text-emerald-600"></i>
+                                        Daftar Kategori Villa & Room
+                                    </h3>
+                                    <span class="text-xs text-slate-400 font-medium" id="total-villa-types-badge">Total: 0 Jenis</span>
+                                </div>
+
+                                <div class="overflow-x-auto">
+                                    <table class="w-full text-left border-collapse">
+                                        <thead>
+                                            <tr class="border-b border-slate-100 text-slate-400 text-xs font-bold uppercase tracking-wider">
+                                                <th class="pb-3 pl-2">Nama Villa / Room</th>
+                                                <th class="pb-3 text-right">Harga Standard (Rp)</th>
+                                                <th class="pb-3 text-center">Stok Unit</th>
+                                                <th class="pb-3 text-right">Aksi</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="villas-table-body" class="divide-y divide-slate-100 text-sm text-slate-700 font-medium">
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 h-fit">
+                            <div class="border-b border-slate-100 pb-4 mb-5">
+                                <h3 class="font-bold text-slate-800 text-base flex items-center gap-2" id="stok-form-title">
+                                    <i class="fa-solid fa-square-plus text-amber-600"></i>
+                                    Tambah Jenis Villa Baru
+                                </h3>
+                                <p class="text-xs text-slate-400 mt-1">Tambahkan inventaris dagangan villa atau room baru Anda di sini.</p>
+                            </div>
+
+                            <form id="villa-editor-form" onsubmit="saveVillaType(event)" class="space-y-4">
+                                <input type="hidden" id="editor-villa-id" value="">
+                                
+                                <div>
+                                    <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Nama Villa / Kamar <span class="text-red-500">*</span></label>
+                                    <input type="text" id="editor-villa-name" required class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-slate-800 text-sm" placeholder="Contoh: Villa President VIP A">
+                                </div>
+
+                                <div>
+                                    <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Harga Sewa / Malam (Rp) <span class="text-red-500">*</span></label>
+                                    <div class="relative">
+                                        <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400 text-sm font-semibold">Rp</span>
+                                        <input type="number" id="editor-villa-price" required class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-slate-800 text-sm" placeholder="2000000" min="0">
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Jumlah Ketersediaan Kamar / Stok <span class="text-red-500">*</span></label>
+                                    <input type="number" id="editor-villa-stock" required class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-slate-800 text-sm" placeholder="3" min="1">
+                                    <p class="text-[10px] text-slate-400 mt-1">Jumlah total fisik unit villa yang siap dipesan oleh pelanggan.</p>
+                                </div>
+
+                                <div class="pt-2 flex gap-2">
+                                    <button type="button" id="btn-cancel-edit-villa" onclick="resetVillaEditor()" class="hidden flex-1 py-3 border border-slate-200 hover:bg-slate-50 text-slate-600 font-semibold rounded-xl text-sm transition-all">
+                                        Batal
+                                    </button>
+                                    <button type="submit" class="flex-1 py-3 bg-emerald-800 hover:bg-emerald-700 text-white font-semibold rounded-xl text-sm transition-all">
+                                        Simpan Inventaris
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+
+                    </div>
+                </section>
+
+                <!-- TAB: LAPORAN KEUANGAN -->
+                <section id="tab-keuangan" class="tab-content hidden space-y-6">
+                    <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+                        
+                        <div class="flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4 border-b border-slate-100 pb-5 mb-6">
+                            <div>
+                                <h3 class="font-bold text-slate-800 text-lg flex items-center gap-2">
+                                    <i class="fa-solid fa-chart-line text-emerald-600"></i>
+                                    Laporan Keuangan & Ringkasan Booking
+                                </h3>
+                                <p class="text-xs text-slate-500 mt-1">Lacak pencatatan omzet, diskon, akumulasi DP, dan sisa piutang sesuai periode.</p>
+                            </div>
+                            
+                            <div class="flex flex-wrap items-center gap-3 w-full xl:w-auto">
+                                <div class="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
+                                    <button onclick="setPeriodFilter('hari')" id="btn-f-hari" class="period-btn px-3.5 py-2 text-xs font-semibold rounded-lg text-slate-600 hover:text-slate-800">Harian</button>
+                                    <button onclick="setPeriodFilter('minggu')" id="btn-f-minggu" class="period-btn px-3.5 py-2 text-xs font-semibold rounded-lg text-slate-600 hover:text-slate-800">Mingguan</button>
+                                    <button onclick="setPeriodFilter('bulan')" id="btn-f-bulan" class="period-btn px-3.5 py-2 text-xs font-semibold rounded-lg text-slate-600 hover:text-slate-800">Bulanan</button>
+                                    <button onclick="setPeriodFilter('kustom')" id="btn-f-kustom" class="period-btn px-3.5 py-2 text-xs font-semibold bg-white text-emerald-800 shadow-sm rounded-lg">Kustom</button>
+                                </div>
+
+                                <div class="flex items-center gap-2 text-sm w-full md:w-auto">
+                                    <input type="date" id="fin-start-date" onchange="runFinancialReport()" class="px-3 py-2 border border-slate-200 bg-slate-50 text-slate-700 rounded-xl text-xs">
+                                    <span class="text-slate-400 text-xs">s/d</span>
+                                    <input type="date" id="fin-end-date" onchange="runFinancialReport()" class="px-3 py-2 border border-slate-200 bg-slate-50 text-slate-700 rounded-xl text-xs">
+                                </div>
+
+                                <button onclick="downloadFinancialReportCSV()" class="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl transition-all flex items-center gap-1.5 shadow">
+                                    <i class="fa-solid fa-file-arrow-down"></i> Download Excel (CSV)
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
+                            <div class="p-5 rounded-2xl bg-emerald-50 border border-emerald-100">
+                                <div class="flex justify-between items-start mb-2">
+                                    <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Pendapatan Bruto</p>
+                                    <span class="p-1.5 bg-emerald-500/10 text-emerald-700 rounded-lg text-sm"><i class="fa-solid fa-wallet"></i></span>
+                                </div>
+                                <h4 class="text-xl font-extrabold text-emerald-800" id="fin-sum-gross">Rp 0</h4>
+                                <p class="text-[10px] text-slate-400 mt-1">Total billing pesanan masuk</p>
+                            </div>
+
+                            <div class="p-5 rounded-2xl bg-amber-50 border border-amber-100">
+                                <div class="flex justify-between items-start mb-2">
+                                    <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">Uang Muka (DP) Masuk</p>
+                                    <span class="p-1.5 bg-amber-500/10 text-amber-700 rounded-lg text-sm"><i class="fa-solid fa-money-check-dollar"></i></span>
+                                </div>
+                                <h4 class="text-xl font-extrabold text-amber-800" id="fin-sum-dp">Rp 0</h4>
+                                <p class="text-[10px] text-slate-400 mt-1">DP yang sudah diterima kasir</p>
+                            </div>
+
+                            <div class="p-5 rounded-2xl bg-blue-50 border border-blue-100">
+                                <div class="flex justify-between items-start mb-2">
+                                    <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">Sisa Piutang / Pelunasan</p>
+                                    <span class="p-1.5 bg-blue-500/10 text-blue-700 rounded-lg text-sm"><i class="fa-solid fa-hourglass-half"></i></span>
+                                </div>
+                                <h4 class="text-xl font-extrabold text-blue-800" id="fin-sum-receivable">Rp 0</h4>
+                                <p class="text-[10px] text-slate-400 mt-1">Sisa tagihan yang harus ditagih</p>
+                            </div>
+
+                            <div class="p-5 rounded-2xl bg-rose-50 border border-rose-100">
+                                <div class="flex justify-between items-start mb-2">
+                                    <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Diskon Diberikan</p>
+                                    <span class="p-1.5 bg-rose-500/10 text-rose-700 rounded-lg text-sm"><i class="fa-solid fa-tags"></i></span>
+                                </div>
+                                <h4 class="text-xl font-extrabold text-rose-800" id="fin-sum-discounts">Rp 0</h4>
+                                <p class="text-[10px] text-slate-400 mt-1">Total nominal potongan khusus</p>
+                            </div>
+                        </div>
+
+                        <div class="space-y-4">
+                            <h4 class="font-bold text-slate-800 text-sm uppercase tracking-wide">Rincian Riwayat Transaksi Booking</h4>
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left border-collapse" id="fin-table-to-download">
+                                    <thead>
+                                        <tr class="border-b border-slate-100 text-slate-400 text-xs font-bold uppercase tracking-wider">
+                                            <th class="pb-3 pl-2">Pemesan</th>
+                                            <th class="pb-3">Tgl Check-In / Out</th>
+                                            <th class="pb-3">Rincian Kamar</th>
+                                            <th class="pb-3 text-right">Total Transaksi</th>
+                                            <th class="pb-3 text-right">DP Masuk</th>
+                                            <th class="pb-3 text-right">Sisa Pelunasan</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="financial-table-body" class="divide-y divide-slate-100 text-xs text-slate-700 font-medium">
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                    </div>
+                </section>
+
+                <!-- TAB: AKUN (EDIT CREDENTIALS & MULTI-USER MANAGEMENT) -->
+                <section id="tab-akun" class="tab-content hidden space-y-6">
+                    <div class="grid grid-cols-1 xl:grid-cols-3 gap-6" id="akun-grid-layout">
+                        
+                        <!-- LEFT COLUMN: Profile & Brand Customization -->
+                        <div class="space-y-6 flex flex-col h-fit" id="my-profile-container">
+                            
+                            <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+                                <div class="border-b border-slate-100 pb-4 mb-5 flex items-center gap-3">
+                                    <div class="p-2.5 bg-emerald-50 text-emerald-600 rounded-xl">
+                                        <i class="fa-solid fa-user-circle text-xl"></i>
+                                    </div>
+                                    <div>
+                                        <h3 class="font-bold text-slate-800 text-base">Profil Saya</h3>
+                                        <p class="text-xs text-slate-400 mt-1">Ubah nama pengguna atau sandi aktif Anda.</p>
+                                    </div>
+                                </div>
+
+                                <form id="profile-form" onsubmit="updateMyProfile(event)" class="space-y-4">
+                                    <div>
+                                        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Username Baru</label>
+                                        <input type="text" id="my-username" required class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-slate-800 text-sm">
+                                    </div>
+
+                                    <div>
+                                        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Password Baru</label>
+                                        <div class="relative">
+                                            <input type="password" id="my-password" required class="w-full px-4 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-slate-800 text-sm" placeholder="Sandi baru">
+                                            <button type="button" onclick="togglePasswordVisibility('my-password')" class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600">
+                                                <i class="fa-regular fa-eye" id="my-password-eye"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <button type="submit" class="w-full py-2.5 bg-emerald-800 hover:bg-emerald-700 text-white font-semibold rounded-xl text-xs transition-all shadow-md">
+                                        Simpan Perubahan Profil
+                                    </button>
+                                </form>
+                            </div>
+
+                            <!-- BRANDING SETTINGS (Administrator Only) -->
+                            <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6" id="branding-settings-container">
+                                <div class="border-b border-slate-100 pb-4 mb-5 flex items-center gap-3">
+                                    <div class="p-2.5 bg-amber-50 text-amber-600 rounded-xl">
+                                        <i class="fa-solid fa-sliders text-xl"></i>
+                                    </div>
+                                    <div>
+                                        <h3 class="font-bold text-slate-800 text-base">Identitas & Logo Villa</h3>
+                                        <p class="text-xs text-slate-400 mt-1">Atur nama, logo kustom, dan favicon aplikasi Anda.</p>
+                                    </div>
+                                </div>
+
+                                <form id="branding-form" onsubmit="saveBrandingSettings(event)" class="space-y-4">
+                                    <div>
+                                        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Nama Villa / Bisnis <span class="text-red-500">*</span></label>
+                                        <input type="text" id="brand-name-input" required class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-800 text-sm" placeholder="Contoh: Bale Ody Villa & Camping Ground">
+                                    </div>
+
+                                    <div>
+                                        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Upload Logo Villa</label>
+                                        <input type="file" id="brand-logo-file" accept="image/*" onchange="previewImageFile(event, 'brand-logo-preview')" class="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 cursor-pointer">
+                                        <div id="logo-preview-box" class="mt-3 hidden p-2 border border-dashed border-slate-200 rounded-xl bg-slate-50 flex items-center justify-center">
+                                            <img id="brand-logo-preview" src="" alt="Pratinjau Logo" class="max-h-16 object-contain">
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Upload Favicon (.ico / .png)</label>
+                                        <input type="file" id="brand-favicon-file" accept="image/*" onchange="previewImageFile(event, 'brand-favicon-preview')" class="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-amber-50 file:text-amber-700 hover:file:bg-amber-100 cursor-pointer">
+                                        <div id="favicon-preview-box" class="mt-3 hidden p-2 border border-dashed border-slate-200 rounded-xl bg-slate-50 flex items-center justify-center">
+                                            <img id="brand-favicon-preview" src="" alt="Pratinjau Favicon" class="w-8 h-8 object-contain">
+                                        </div>
+                                    </div>
+
+                                    <button type="submit" class="w-full py-2.5 bg-emerald-800 hover:bg-emerald-700 text-white font-semibold rounded-xl text-xs transition-all shadow-md">
+                                        Perbarui Identitas Villa
+                                    </button>
+                                </form>
+                            </div>
+
+                        </div>
+
+                        <!-- RIGHT COLUMN: User List -->
+                        <div class="xl:col-span-2 space-y-6" id="user-management-section">
+                            <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+                                <div class="border-b border-slate-100 pb-4 mb-5 flex justify-between items-center">
+                                    <div class="flex items-center gap-3">
+                                        <div class="p-2.5 bg-amber-50 text-amber-600 rounded-xl">
+                                            <i class="fa-solid fa-users-gear text-xl"></i>
+                                        </div>
+                                        <div>
+                                            <h3 class="font-bold text-slate-800 text-base">Kelola Akun Kasir & Admin</h3>
+                                            <p class="text-xs text-slate-400 mt-1">Tambahkan login tambahan untuk staf kasir atau admin lain.</p>
+                                        </div>
+                                    </div>
+                                    <button onclick="openAddUserForm()" class="text-xs bg-amber-50 text-amber-800 border border-amber-200 font-semibold px-3 py-1.5 rounded-lg hover:bg-amber-100 transition-all">
+                                        <i class="fa-solid fa-plus-circle mr-1"></i> Tambah Akun
+                                    </button>
+                                </div>
+
+                                <div id="user-editor-container" class="hidden mb-6 p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-4">
+                                    <h4 id="user-form-title" class="text-xs font-bold text-slate-700 uppercase tracking-wider">Tambah Pengguna Baru</h4>
+                                    <form id="user-management-form" onsubmit="saveUserAccount(event)" class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                                        <input type="hidden" id="manage-user-id" value="">
+                                        <div class="md:col-span-2">
+                                            <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1.5">Username <span class="text-red-500">*</span></label>
+                                            <input type="text" id="manage-username" required class="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500" placeholder="Username">
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1.5">Password <span class="text-red-500">*</span></label>
+                                            <input type="password" id="manage-password" required class="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500" placeholder="Password">
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1.5">Role / Jabatan <span class="text-red-500">*</span></label>
+                                            <select id="manage-role" required class="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500">
+                                                <option value="Administrator">Administrator</option>
+                                                <option value="Editor">Editor</option>
+                                                <option value="Kasir" selected>Kasir</option>
+                                            </select>
+                                        </div>
+                                        <div class="md:col-span-4 flex justify-end gap-2 pt-2 border-t border-slate-200/50">
+                                            <button type="button" onclick="closeUserEditor()" class="px-3.5 py-1.5 border border-slate-200 text-slate-600 font-semibold text-xs rounded-lg hover:bg-slate-50 transition-all">Batal</button>
+                                            <button type="submit" class="px-4 py-1.5 bg-emerald-800 text-white font-semibold text-xs rounded-lg hover:bg-emerald-700 transition-all">Simpan Akun</button>
+                                        </div>
+                                    </form>
+                                </div>
+
+                                <div class="overflow-x-auto">
+                                    <table class="w-full text-left border-collapse">
+                                        <thead>
+                                            <tr class="border-b border-slate-100 text-slate-400 text-xs font-bold uppercase tracking-wider">
+                                                <th class="pb-3 pl-2">Username</th>
+                                                <th class="pb-3">Jabatan / Role</th>
+                                                <th class="pb-3">Kata Sandi</th>
+                                                <th class="pb-3 text-right">Aksi</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="accounts-table-body" class="divide-y divide-slate-100 text-xs text-slate-700 font-medium">
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </section>
+
+            </div>
+
+            <!-- FOOTER -->
+            <footer class="bg-white border-t border-slate-100 py-4 px-6 text-center text-xs text-slate-400 shrink-0">
+                <span><span class="dynamic-villa-name">Bale Ody Villa & Camping Ground</span> &copy; 2026. Dashboard Management</span>
+            </footer>
+
+        </main>
+    </div>
+
+</div>
+
+<!-- CUSTOM MODAL COMPONENT -->
+<div id="custom-modal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[70]">
+    <div class="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 transform transition-all text-center">
+        <div id="modal-icon-container" class="inline-flex p-3 rounded-full mb-4"></div>
+        <h4 id="modal-title" class="text-lg font-bold text-slate-900 mb-1">Judul Pesan</h4>
+        <div id="modal-body" class="text-xs text-slate-500 mb-5 leading-relaxed"></div>
+        <div class="flex gap-2 mt-2">
+            <button id="modal-cancel-btn" class="hidden flex-1 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 font-semibold rounded-xl text-xs transition-all">Batal</button>
+            <button id="modal-ok-btn" class="flex-1 py-2.5 text-white font-semibold rounded-xl text-xs transition-all">OK</button>
+        </div>
+    </div>
+</div>
+
+<!-- EDIT BOOKING MODAL (POPUP) -->
+<div id="edit-booking-modal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[60] overflow-y-auto">
+    <div class="bg-white rounded-2xl w-full max-w-3xl shadow-2xl relative my-8 flex flex-col max-h-[90vh]">
+        <div class="p-5 border-b border-slate-100 flex justify-between items-center shrink-0">
+            <h3 class="font-bold text-slate-800 text-lg flex items-center gap-2">
+                <i class="fa-regular fa-pen-to-square text-amber-600"></i>
+                Edit Reservasi <span id="edit-modal-title-id" class="text-slate-400 font-normal text-base"></span>
+            </h3>
+            <button type="button" onclick="closeEditBookingModal()" class="w-8 h-8 rounded-full bg-slate-100 text-slate-500 hover:bg-rose-100 hover:text-rose-600 flex items-center justify-center transition-colors">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+        
+        <div class="p-6 overflow-y-auto flex-1">
+            <form id="edit-booking-form" onsubmit="submitEditBooking(event)" class="space-y-5">
+                <input type="hidden" id="edit-booking-id">
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1.5">Nama Pemesan <span class="text-red-500">*</span></label>
+                        <input type="text" id="edit-b-cust-name" required class="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800 text-sm">
+                    </div>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1.5">Check In <span class="text-red-500">*</span></label>
+                            <input type="date" id="edit-b-checkin" required onchange="calculateEditTotalSummary()" class="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800 text-xs">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1.5">Check Out <span class="text-red-500">*</span></label>
+                            <input type="date" id="edit-b-checkout" required onchange="calculateEditTotalSummary()" class="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800 text-xs">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="border-t border-slate-100 pt-4">
+                    <div class="flex justify-between items-center mb-3">
+                        <label class="block text-[11px] font-bold text-slate-600 uppercase tracking-wider"><i class="fa-solid fa-bed mr-1 text-slate-400"></i> Kamar</label>
+                        <button type="button" onclick="addEditVillaRow()" class="text-[10px] text-amber-600 font-semibold bg-amber-50 hover:bg-amber-100 px-2 py-1 rounded-lg transition-all"><i class="fa-solid fa-plus-circle"></i> Tambah Kamar</button>
+                    </div>
+                    <div id="edit-villa-rows-container" class="space-y-2"></div>
+                </div>
+
+                <div class="border-t border-slate-100 pt-4">
+                    <div class="flex justify-between items-center mb-3">
+                        <label class="block text-[11px] font-bold text-slate-600 uppercase tracking-wider"><i class="fa-solid fa-bell-concierge mr-1 text-slate-400"></i> Add-on</label>
+                        <button type="button" onclick="addEditAddonRow()" class="text-[10px] text-emerald-600 font-semibold bg-emerald-50 hover:bg-emerald-100 px-2 py-1 rounded-lg transition-all"><i class="fa-solid fa-plus-circle"></i> Tambah Add-on</button>
+                    </div>
+                    <div id="edit-addon-rows-container" class="space-y-2"></div>
+                </div>
+
+                <div class="border-t border-slate-100 pt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1.5">Diskon (Rp)</label>
+                        <input type="number" id="edit-b-discount" oninput="calculateEditTotalSummary()" class="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800 text-sm" min="0" value="0">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1.5">Uang Muka / DP (Rp)</label>
+                        <input type="number" id="edit-b-dp" oninput="calculateEditTotalSummary()" class="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800 text-sm" min="0" value="0">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1.5">Metode Bayar DP</label>
+                        <select id="edit-b-dp-method" class="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800 text-sm">
+                            <option value="None">Pilih Metode</option>
+                            <option value="Cash">Cash</option>
+                            <option value="Transfer">Transfer</option>
+                        </select>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <div class="p-5 border-t border-slate-200 shrink-0 bg-slate-50 rounded-b-2xl flex flex-col md:flex-row items-center justify-between gap-4">
+            <div class="flex gap-6 text-xs w-full md:w-auto overflow-x-auto pb-2 md:pb-0">
+                <div>
+                    <span class="text-slate-500 block mb-0.5">Total Ruangan:</span>
+                    <span class="font-bold text-slate-800" id="edit-inv-villa-total">Rp 0</span>
+                </div>
+                <div>
+                    <span class="text-slate-500 block mb-0.5">Total Add-on:</span>
+                    <span class="font-bold text-slate-800" id="edit-inv-addon-total">Rp 0</span>
+                </div>
+                <div>
+                    <span class="text-slate-500 block mb-0.5">Grand Total:</span>
+                    <span class="font-bold text-emerald-700" id="edit-inv-grand-total">Rp 0</span>
+                </div>
+                <div>
+                    <span class="text-slate-500 block mb-0.5 font-bold uppercase">Sisa:</span>
+                    <span class="font-black text-amber-600 text-sm" id="edit-inv-remaining-total">Rp 0</span>
+                </div>
+            </div>
+            <div class="flex gap-2 w-full md:w-auto shrink-0">
+                <button type="button" onclick="closeEditBookingModal()" class="flex-1 md:flex-none px-4 py-2 border border-slate-200 hover:bg-white text-slate-600 font-semibold rounded-xl text-xs transition-all">Batal</button>
+                <button type="submit" form="edit-booking-form" class="flex-1 md:flex-none px-6 py-2 bg-amber-600 hover:bg-amber-500 text-white font-semibold rounded-xl text-xs shadow-md transition-all">Simpan Edit <i class="fa-solid fa-check ml-1"></i></button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // FIX PENTING: Paksa HTML membaca api.php yang ada di foldernya.
+    const BASE_API_URL = 'api.php'; 
+
+    // --- STREAMING_CHUNK:Defining Core API Functions ---
+    async function apiRequest(action, data = null, method = 'POST') {
+        try {
+            // Tambahkan timestamp untuk menghindari cache dari browser
+            const cacheBuster = `&t=${new Date().getTime()}`;
+            const requestUrl = `${BASE_API_URL}?action=${action}${cacheBuster}`;
+
+            const options = {
+                method: method,
+                headers: { 'Content-Type': 'application/json' }
+            };
+            if (data && method === 'POST') {
+                options.body = JSON.stringify(data);
+            }
+
+            const response = await fetch(requestUrl, options);
+            if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+            
+            const resultData = await response.json();
+            updateConnectionStatus(false, "MySQL Server");
+            return resultData;
+        } catch (error) {
+            console.error("Fetch API Error:", error);
+            updateConnectionStatus(true, "Terputus dari MySQL");
+            return { status: 'error', message: 'Gagal terhubung ke database. Periksa koneksi atau file api.php Anda.' };
+        }
+    }
+
+    function updateConnectionStatus(isError, label) {
+        const badge = document.getElementById('connection-badge');
+        const statusText = document.getElementById('connection-status');
+        const dot = document.getElementById('badge-dot');
+
+        if (!badge) return;
+
+        if (isError) {
+            badge.className = "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200";
+            statusText.innerText = label;
+            dot.className = "w-2 h-2 rounded-full bg-red-500";
+        } else {
+            badge.className = "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200";
+            statusText.innerText = label;
+            dot.className = "w-2 h-2 rounded-full bg-emerald-500 animate-pulse";
+        }
+    }
+
+    async function loadAllDataFromMySQL() {
+        const result = await apiRequest('init', null, 'GET');
+        if (result && result.status === 'success') {
+            villas = result.villas;
+            bookings = result.bookings;
+            accounts = result.accounts;
+            settings = result.settings;
+
+            if (result.activeDriver) {
+                updateConnectionStatus(false, result.activeDriver);
+            }
+
+            applyBranding();
+            renderPublicMonthlyMonitor();
+            renderVillasTable();
+            setResPeriodFilter('hari'); // Ganti inisialisasi reservasi ke "Hari Ini"
+            runFinancialReport();
+            
+            if (currentUser) {
+                applyRolePermissions();
+            }
+        } else {
+            if(result && result.message) {
+                showModal("Error Database", result.message, "error");
+            }
+        }
+    }
+
+    window.onload = function () {
+        setInterval(() => {
+            const now = new Date();
+            document.getElementById('clock-display').innerText = now.toLocaleString('id-ID', {
+                dateStyle: 'medium',
+                timeStyle: 'medium'
+            });
+        }, 1000);
+
+        loadAllDataFromMySQL();
+        
+        const today = new Date().toISOString().split('T')[0];
+        const firstDayOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+        document.getElementById('fin-start-date').value = firstDayOfMonth;
+        document.getElementById('fin-end-date').value = today;
+        
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        document.getElementById('b-checkin').value = today;
+        document.getElementById('b-checkout').value = tomorrow.toISOString().split('T')[0];
+
+        handleDatesChanged();
+    }
+
+    // --- STREAMING_CHUNK:Defining UI Helpers ---
+    function showModal(title, textHTML, type = 'info', onOk = null, onCancel = null) {
+        const modal = document.getElementById('custom-modal');
+        const mTitle = document.getElementById('modal-title');
+        const mBody = document.getElementById('modal-body');
+        const mIconBox = document.getElementById('modal-icon-container');
+        const btnOk = document.getElementById('modal-ok-btn');
+        const btnCancel = document.getElementById('modal-cancel-btn');
+
+        mTitle.innerText = title;
+        mBody.innerHTML = textHTML;
+
+        if (type === 'success') {
+            mIconBox.className = "inline-flex p-3 rounded-full mb-4 bg-emerald-50 text-emerald-600";
+            mIconBox.innerHTML = '<i class="fa-solid fa-circle-check text-2xl"></i>';
+            btnOk.className = "flex-1 py-2.5 bg-emerald-800 hover:bg-emerald-700 text-white font-semibold rounded-xl text-xs transition-all";
+        } else if (type === 'error') {
+            mIconBox.className = "inline-flex p-3 rounded-full mb-4 bg-red-50 text-red-600";
+            mIconBox.innerHTML = '<i class="fa-solid fa-triangle-exclamation text-2xl"></i>';
+            btnOk.className = "flex-1 py-2.5 bg-red-700 hover:bg-red-600 text-white font-semibold rounded-xl text-xs transition-all";
+        } else if (type === 'warning') {
+            mIconBox.className = "inline-flex p-3 rounded-full mb-4 bg-amber-50 text-amber-600";
+            mIconBox.innerHTML = '<i class="fa-solid fa-circle-exclamation text-2xl"></i>';
+            btnOk.className = "flex-1 py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-semibold rounded-xl text-xs transition-all";
+        } else {
+            mIconBox.className = "inline-flex p-3 rounded-full mb-4 bg-slate-100 text-slate-600";
+            mIconBox.innerHTML = '<i class="fa-solid fa-circle-info text-2xl"></i>';
+            btnOk.className = "flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-semibold rounded-xl text-xs transition-all";
+        }
+
+        modal.classList.remove('hidden');
+
+        btnOk.onclick = function() {
+            modal.classList.add('hidden');
+            if (onOk) onOk();
+        };
+
+        if (onCancel) {
+            btnCancel.classList.remove('hidden');
+            btnCancel.onclick = function() {
+                modal.classList.add('hidden');
+                onCancel();
+            };
+        } else {
+            btnCancel.classList.add('hidden');
+        }
+    }
+
+    function togglePasswordVisibility(inputId) {
+        const input = document.getElementById(inputId);
+        const eye = document.getElementById(inputId + '-eye');
+        if (input.type === 'password') {
+            input.type = 'text';
+            eye.className = 'fa-regular fa-eye-slash';
+        } else {
+            input.type = 'password';
+            eye.className = 'fa-regular fa-eye';
+        }
+    }
+
+    function toggleSidebar() {
+        sidebarCollapsed = !sidebarCollapsed;
+        const sidebar = document.getElementById('sidebar');
+        const toggleIcon = document.querySelector('#sidebar-toggle i');
+        
+        if (sidebarCollapsed) {
+            sidebar.classList.remove('md:w-72');
+            sidebar.classList.add('md:w-20', 'collapsed');
+            if (toggleIcon) toggleIcon.className = "fa-solid fa-angles-right";
+        } else {
+            sidebar.classList.remove('md:w-20', 'collapsed');
+            sidebar.classList.add('md:w-72');
+            if (toggleIcon) toggleIcon.className = "fa-solid fa-angles-left";
+        }
+    }
+
+    function formatTanggalIndo(dateString) {
+        const days = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+        const months = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+        
+        const d = new Date(dateString);
+        const dayName = days[d.getDay()];
+        const day = d.getDate();
+        const monthName = months[d.getMonth()];
+        const year = d.getFullYear();
+        
+        return `${dayName}, ${day} ${monthName} ${year}`;
+    }
+
+    // --- STREAMING_CHUNK:Defining System Settings & Auth ---
+    function applyBranding() {
+        const vName = settings.villaName || "Bale Ody Villa & Camping Ground";
+        
+        document.querySelectorAll('.dynamic-villa-name').forEach(el => {
+            el.innerText = vName;
+        });
+        document.getElementById('browser-title').innerText = `${vName} - Dashboard Kasir`;
+
+        const logoContainer = document.getElementById('sidebar-logo-container');
+        const loginLogoContainer = document.getElementById('login-logo-container');
+
+        if (settings.villaLogo) {
+            logoContainer.innerHTML = `<img src="${settings.villaLogo}" alt="Logo" class="w-10 h-10 rounded-xl object-cover border border-emerald-800/30">`;
+            loginLogoContainer.innerHTML = `<img src="${settings.villaLogo}" alt="Logo" class="max-h-20 max-w-[200px] object-contain rounded-2xl">`;
+        } else {
+            logoContainer.innerHTML = `<div class="p-2.5 bg-amber-500/15 text-amber-400 rounded-xl"><i class="fa-solid fa-hotel text-xl"></i></div>`;
+            loginLogoContainer.innerHTML = `<div class="p-3 bg-amber-50 text-amber-600 rounded-2xl"><i class="fa-solid fa-hotel text-3xl"></i></div>`;
+        }
+
+        const faviconElement = document.getElementById('dynamic-favicon');
+        if (settings.villaFavicon) {
+            faviconElement.href = settings.villaFavicon;
+        } else {
+            const firstLetter = vName.charAt(0).toUpperCase();
+            faviconElement.href = `data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22 width=%22100%22 height=%22100%22><rect width=%22100%22 height=%22100%22 rx=%2222%22 fill=%22%23065f46%22/><text y=%2270%22 x=%2228%22 font-family=%22sans-serif%22 font-size=%2255%22 fill=%22%23f59e0b%22 font-weight=%22bold%22>${firstLetter}</text></svg>`;
+        }
+    }
+
+    let uploadedLogoBase64 = "";
+    let uploadedFaviconBase64 = "";
+
+    function previewImageFile(event, previewImgId) {
+        const file = event.target.files[0];
+        const previewImg = document.getElementById(previewImgId);
+        const previewBox = previewImg.parentElement;
+
+        if (file) {
+            if (file.size > 1024 * 1024) {
+                showModal("File Terlalu Besar", "Mohon pilih berkas gambar maksimal 1MB.", "error");
+                event.target.value = "";
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                previewImg.src = e.target.result;
+                previewBox.classList.remove('hidden');
+                
+                if (previewImgId === 'brand-logo-preview') {
+                    uploadedLogoBase64 = e.target.result;
+                } else if (previewImgId === 'brand-favicon-preview') {
+                    uploadedFaviconBase64 = e.target.result;
+                }
+            };
+            reader.readAsDataURL(file);
+        }
+    }
+
+    async function saveBrandingSettings(e) {
+        e.preventDefault();
+        const customName = document.getElementById('brand-name-input').value.trim();
+
+        if (!customName) {
+            showModal("Input Kosong", "Nama villa / bisnis wajib diisi!", "error");
+            return;
+        }
+
+        const dataBranding = { villaName: customName };
+        if (uploadedLogoBase64) dataBranding.villaLogo = uploadedLogoBase64;
+        if (uploadedFaviconBase64) dataBranding.villaFavicon = uploadedFaviconBase64;
+
+        const res = await apiRequest('save_branding', dataBranding);
+        if (res && res.status === 'success') {
+            showModal("Berhasil!", "Identitas dan branding berhasil diperbarui!", "success");
+            await loadAllDataFromMySQL();
+        } else {
+            showModal("Gagal", res.message || "Gagal menyimpan branding", "error");
+        }
+    }
+
+    function applyRolePermissions() {
+        if (!currentUser) return;
+        const role = currentUser.role || 'Kasir';
+        
+        const userManagementSection = document.getElementById('user-management-section');
+        const brandingSettingsContainer = document.getElementById('branding-settings-container');
+        const akunGridLayout = document.getElementById('akun-grid-layout');
+        const myProfileContainer = document.getElementById('my-profile-container');
+
+        if (role === 'Administrator') {
+            if (userManagementSection) userManagementSection.classList.remove('hidden');
+            if (brandingSettingsContainer) brandingSettingsContainer.classList.remove('hidden');
+            if (akunGridLayout) akunGridLayout.className = "grid grid-cols-1 xl:grid-cols-3 gap-6";
+            if (myProfileContainer) myProfileContainer.className = "space-y-6 flex flex-col h-fit";
+        } else {
+            if (userManagementSection) userManagementSection.classList.add('hidden');
+            if (brandingSettingsContainer) brandingSettingsContainer.classList.add('hidden');
+            if (akunGridLayout) akunGridLayout.className = "grid grid-cols-1 max-w-xl mx-auto gap-6";
+            if (myProfileContainer) myProfileContainer.className = "bg-white rounded-2xl shadow-sm border border-slate-100 p-6 h-fit w-full";
+        }
+    }
+
+    async function handleLogin(e) {
+        e.preventDefault();
+        const userIn = document.getElementById('login-username').value.trim();
+        const passIn = document.getElementById('login-password').value;
+        const alertBox = document.getElementById('login-alert');
+
+        alertBox.classList.add('hidden');
+        document.getElementById('login-alert-msg').innerText = "Memproses login...";
+
+        const result = await apiRequest('login', { username: userIn, password: passIn });
+
+        if (result && result.status === 'success') {
+            currentUser = result.user;
+            document.getElementById('login-view').classList.add('hidden');
+            document.getElementById('main-view').classList.remove('hidden');
+            document.getElementById('current-user-display').innerText = currentUser.username;
+            document.getElementById('current-role-display').innerText = currentUser.role || 'Kasir';
+            
+            applyRolePermissions();
+            switchTab('dashboard');
+        } else {
+            alertBox.classList.remove('hidden');
+            document.getElementById('login-alert-msg').innerText = result.message || "Koneksi gagal atau User salah!";
+        }
+    }
+
+    function handleLogout() {
+        currentUser = null;
+        document.getElementById('login-password').value = '';
+        document.getElementById('main-view').classList.add('hidden');
+        document.getElementById('login-view').classList.remove('hidden');
+        loadAllDataFromMySQL();
+    }
+
+    // --- STREAMING_CHUNK:Defining Tab Logic & Form Actions ---
+    function switchTab(tabId, preserveForm = false) {
+        document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+        document.querySelectorAll('.nav-item').forEach(el => {
+            el.classList.remove('bg-emerald-900/80', 'text-white', 'border-l-4', 'border-amber-500');
+        });
+
+        document.getElementById('tab-' + tabId).classList.remove('hidden');
+        
+        const activeNav = document.getElementById('nav-' + tabId);
+        if (activeNav) {
+            activeNav.classList.add('bg-emerald-900/80', 'text-white', 'border-l-4', 'border-amber-500');
+        }
+
+        const titles = {
+            dashboard: { title: "Kasir & Reservasi Baru", desc: "Buat pesanan sewa kamar, pilih metode pembayaran, hitung addon & DP disini" },
+            reservasi: { title: "Database Reservasi", desc: "Lacak detail pemesan per bulan/hari ini, aktif, lalu history di bagian bawah" },
+            stok: { title: "Kelola Stok Villa", desc: "Atur jenis, harga standard sewa kamar/villa, serta kuota kamar fisik" },
+            keuangan: { title: "Laporan Keuangan", desc: "Pantau rekapitulasi omzet sewa, diskon, uang muka, dan sisa tagihan piutang" },
+            akun: { title: "Kelola Akun & Identitas", desc: "Ganti profil aktif, atau kelola identitas brand dan hak akses admin lainnya" }
+        };
+
+        if (titles[tabId] && (!preserveForm || tabId !== 'dashboard')) {
+            document.getElementById('current-tab-title').innerText = titles[tabId].title;
+            document.getElementById('current-tab-desc').innerText = titles[tabId].desc;
+        }
+
+        if (tabId === 'dashboard') {
+            if (!preserveForm) {
+                document.getElementById('booking-form').removeAttribute('data-editing-id');
+                resetBookingForm();
+            }
+        } else if (tabId === 'reservasi') {
+            loadFilteredReservations(); // Load based on current filter instead of arbitrary load
+        } else if (tabId === 'stok') {
+            renderVillasTable();
+        } else if (tabId === 'keuangan') {
+            runFinancialReport();
+        } else if (tabId === 'akun') {
+            if (currentUser) {
+                document.getElementById('my-username').value = currentUser.username;
+            }
+            document.getElementById('brand-name-input').value = settings.villaName || "Bale Ody Villa & Camping Ground";
+            
+            if (settings.villaLogo) {
+                document.getElementById('brand-logo-preview').src = settings.villaLogo;
+                document.getElementById('logo-preview-box').classList.remove('hidden');
+                uploadedLogoBase64 = settings.villaLogo;
+            } else {
+                document.getElementById('logo-preview-box').classList.add('hidden');
+            }
+
+            if (settings.villaFavicon) {
+                document.getElementById('brand-favicon-preview').src = settings.villaFavicon;
+                document.getElementById('favicon-preview-box').classList.remove('hidden');
+                uploadedFaviconBase64 = settings.villaFavicon;
+            } else {
+                document.getElementById('favicon-preview-box').classList.add('hidden');
+            }
+
+            renderAccountsTable();
+            closeUserEditor();
+        }
+    }
+
+    function addVillaRow(villaId = "", qty = 1, price = null) {
+        const container = document.getElementById('villa-rows-container');
+        const rowId = 'villa-row-' + Date.now() + Math.floor(Math.random() * 100);
+
+        let selectOptions = `<option value="" disabled selected>-- Pilih Jenis Kamar --</option>`;
+        villas.forEach(v => {
+            selectOptions += `<option value="${v.id}" ${v.id === villaId ? 'selected' : ''}>${v.name} (Rp ${parseFloat(v.price).toLocaleString('id-ID')})</option>`;
+        });
+
+        const rowHTML = `
+            <div id="${rowId}" class="villa-item-row flex flex-col md:flex-row items-stretch gap-2.5 bg-slate-50 border border-slate-200 p-3.5 rounded-xl">
+                <div class="flex-1">
+                    <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Tipe Kamar</label>
+                    <select onchange="updateRowPrice('${rowId}')" required class="villa-select w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500">
+                        ${selectOptions}
+                    </select>
+                </div>
+                <div class="w-24">
+                    <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Jumlah Qty</label>
+                    <input type="number" oninput="handleVillaRowInput()" value="${qty}" min="1" required class="villa-qty w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500 text-center">
+                </div>
+                <div class="flex-1">
+                    <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Harga Khusus (Rp)</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-xs">Rp</span>
+                        <input type="number" oninput="calculateTotalSummary()" value="${price !== null ? price : ''}" required class="villa-price w-full pl-8 pr-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500">
+                    </div>
+                </div>
+                <div class="self-end md:pb-1">
+                    <button type="button" onclick="removeVillaRow('${rowId}')" class="p-2 text-rose-500 hover:text-white hover:bg-rose-500/95 border border-rose-200 rounded-lg transition-all" title="Hapus">
+                        <i class="fa-solid fa-trash-can text-sm"></i>
+                    </button>
+                </div>
+            </div>
+        `;
+        container.insertAdjacentHTML('beforeend', rowHTML);
+
+        if (price === null && villaId !== "") updateRowPrice(rowId);
+        else calculateTotalSummary();
+    }
+
+    function removeVillaRow(rowId) {
+        const row = document.getElementById(rowId);
+        if (row) {
+            row.remove();
+            calculateTotalSummary();
+            generateLiveStockMonitor();
+        }
+    }
+
+    function updateRowPrice(rowId) {
+        const row = document.getElementById(rowId);
+        const villaId = row.querySelector('.villa-select').value;
+        const priceInput = row.querySelector('.villa-price');
+        const villaObj = villas.find(v => v.id === villaId);
+        
+        if (villaObj) priceInput.value = parseInt(villaObj.price);
+        calculateTotalSummary();
+        generateLiveStockMonitor();
+    }
+
+    function handleVillaRowInput() {
+        calculateTotalSummary();
+        generateLiveStockMonitor();
+    }
+
+    function addAddonRow(name = "", price = "") {
+        const container = document.getElementById('addon-rows-container');
+        const rowId = 'addon-row-' + Date.now() + Math.floor(Math.random() * 100);
+
+        const rowHTML = `
+            <div id="${rowId}" class="addon-item-row flex items-stretch gap-2 bg-slate-50 border border-slate-100 p-3 rounded-xl">
+                <div class="flex-1">
+                    <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Nama Layanan</label>
+                    <input type="text" value="${name}" placeholder="Contoh: Catering" required class="addon-name w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500">
+                </div>
+                <div class="flex-1">
+                    <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Biaya (Rp)</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 text-xs">Rp</span>
+                        <input type="number" value="${price}" oninput="calculateTotalSummary()" placeholder="0" required class="addon-price w-full pl-8 pr-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500">
+                    </div>
+                </div>
+                <div class="self-end pb-1">
+                    <button type="button" onclick="removeAddonRow('${rowId}')" class="p-2 text-rose-500 hover:text-white hover:bg-rose-500/95 border border-rose-200 rounded-lg transition-all" title="Hapus">
+                        <i class="fa-solid fa-trash-can text-sm"></i>
+                    </button>
+                </div>
+            </div>
+        `;
+        container.insertAdjacentHTML('beforeend', rowHTML);
+        calculateTotalSummary();
+    }
+
+    function removeAddonRow(rowId) {
+        const row = document.getElementById(rowId);
+        if (row) {
+            row.remove();
+            calculateTotalSummary();
+        }
+    }
+
+    // --- STREAMING_CHUNK:Defining Calculation Helpers ---
+    function handleDatesChanged() {
+        const checkIn = document.getElementById('b-checkin').value;
+        const checkOut = document.getElementById('b-checkout').value;
+
+        document.getElementById('live-ci-display').innerText = checkIn ? checkIn : "-";
+        document.getElementById('live-co-display').innerText = checkOut ? checkOut : "-";
+
+        if (checkIn && checkOut && new Date(checkIn) < new Date(checkOut)) {
+            const nights = Math.ceil((new Date(checkOut) - new Date(checkIn)) / (1000 * 60 * 60 * 24));
+            document.getElementById('live-nights-display').innerText = `Durasi Menginap: ${nights} Malam`;
+            
+            const form = document.getElementById('booking-form');
+            const editingId = form.getAttribute('data-editing-id');
+            generateLiveStockMonitor(editingId);
+            calculateTotalSummary();
+        } else {
+            document.getElementById('live-nights-display').innerText = "Masukkan Tanggal yang valid";
+            document.getElementById('live-stock-monitor').innerHTML = `<p class="text-slate-500 text-xs text-center py-4">Tentukan tanggal booking untuk melihat stok.</p>`;
+        }
+    }
+
+    function generateLiveStockMonitor(excludeBookingId = null) {
+        const checkIn = document.getElementById('b-checkin').value;
+        const checkOut = document.getElementById('b-checkout').value;
+
+        if (!checkIn || !checkOut || new Date(checkIn) >= new Date(checkOut)) return;
+
+        const matrix = calculateStockMatrix(checkIn, checkOut, excludeBookingId);
+        const container = document.getElementById('live-stock-monitor');
+        container.innerHTML = "";
+
+        const aggStock = {};
+        villas.forEach(v => {
+            aggStock[v.id] = { name: v.name, total: parseInt(v.stock), minRemaining: parseInt(v.stock) };
+        });
+
+        for (const date in matrix) {
+            for (const villaId in matrix[date]) {
+                const rem = matrix[date][villaId].remaining;
+                if (rem < aggStock[villaId].minRemaining) {
+                    aggStock[villaId].minRemaining = rem;
+                }
+            }
+        }
+
+        const formDemands = {};
+        document.querySelectorAll('.villa-item-row').forEach(row => {
+            const selectVal = row.querySelector('.villa-select').value;
+            const qtyVal = parseInt(row.querySelector('.villa-qty').value) || 0;
+            if (selectVal) formDemands[selectVal] = (formDemands[selectVal] || 0) + qtyVal;
+        });
+
+        let html = "";
+        for (const id in aggStock) {
+            const data = aggStock[id];
+            const demand = formDemands[id] || 0;
+            const finalStock = data.minRemaining - demand;
+
+            let badgeColor = "bg-emerald-500/15 text-emerald-300";
+            let borderColor = "border-slate-850";
+            if (finalStock <= 0) {
+                badgeColor = "bg-rose-500/20 text-rose-300";
+                borderColor = "border-rose-500/30";
+            } else if (finalStock < 2) {
+                badgeColor = "bg-amber-500/15 text-amber-300";
+                borderColor = "border-amber-500/30";
+            }
+
+            html += `
+                <div class="flex items-center justify-between p-2.5 bg-slate-800/45 rounded-xl border ${borderColor} text-xs">
+                    <div class="flex-1 pr-2">
+                        <p class="font-semibold text-slate-200 truncate">${data.name}</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        ${demand > 0 ? `<span class="bg-blue-500/15 text-blue-300 border border-blue-500/20 px-2 py-0.5 rounded text-[10px]">Dipilih: ${demand}</span>` : ''}
+                        <span class="px-2 py-1 rounded font-bold ${badgeColor}">Sisa: ${data.minRemaining} Unit</span>
+                    </div>
+                </div>
+            `;
+        }
+        container.innerHTML = html;
+    }
+
+    function calculateTotalSummary() {
+        const checkIn = document.getElementById('b-checkin').value;
+        const checkOut = document.getElementById('b-checkout').value;
+
+        let nights = 1;
+        if (checkIn && checkOut && new Date(checkIn) < new Date(checkOut)) {
+            nights = Math.ceil((new Date(checkOut) - new Date(checkIn)) / (1000 * 60 * 60 * 24));
+        }
+
+        let villaTotal = 0;
+        document.querySelectorAll('.villa-item-row').forEach(row => {
+            const qty = parseInt(row.querySelector('.villa-qty').value) || 0;
+            const price = parseFloat(row.querySelector('.villa-price').value) || 0;
+            villaTotal += (qty * price) * nights;
+        });
+
+        let addonTotal = 0;
+        document.querySelectorAll('.addon-item-row').forEach(row => {
+            const price = parseFloat(row.querySelector('.addon-price').value) || 0;
+            addonTotal += price;
+        });
+
+        const discount = parseFloat(document.getElementById('b-discount').value) || 0;
+        const dp = parseFloat(document.getElementById('b-dp').value) || 0;
+
+        const subtotal = villaTotal + addonTotal;
+        const grandTotal = Math.max(0, subtotal - discount);
+        const remaining = Math.max(0, grandTotal - dp);
+
+        document.getElementById('inv-villa-total').innerText = "Rp " + villaTotal.toLocaleString('id-ID');
+        document.getElementById('inv-addon-total').innerText = "Rp " + addonTotal.toLocaleString('id-ID');
+        
+        const discountRow = document.getElementById('inv-discount-row');
+        if (discount > 0) {
+            discountRow.classList.remove('hidden');
+            discountRow.classList.add('flex');
+            document.getElementById('inv-discount-total').innerText = "- Rp " + discount.toLocaleString('id-ID');
+        } else {
+            discountRow.classList.remove('flex');
+            discountRow.classList.add('hidden');
+        }
+
+        document.getElementById('inv-grand-total').innerText = "Rp " + grandTotal.toLocaleString('id-ID');
+        document.getElementById('inv-dp-total').innerText = "Rp " + dp.toLocaleString('id-ID');
+        document.getElementById('inv-remaining-total').innerText = "Rp " + remaining.toLocaleString('id-ID');
+
+        return { subtotal, grandTotal, remaining, discount, dp, villaTotal, addonTotal, nights };
+    }
+
+    function resetBookingForm() {
+        document.getElementById('booking-form').reset();
+        document.getElementById('villa-rows-container').innerHTML = "";
+        document.getElementById('addon-rows-container').innerHTML = "";
+        document.getElementById('b-dp-method').value = "None";
+        document.getElementById('booking-form').removeAttribute('data-editing-id');
+
+        const today = new Date().toISOString().split('T')[0];
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        document.getElementById('b-checkin').value = today;
+        document.getElementById('b-checkout').value = tomorrow.toISOString().split('T')[0];
+
+        addVillaRow();
+        handleDatesChanged();
+    }
+
+    async function submitNewBooking(e) {
+        e.preventDefault();
+        
+        const customerName = document.getElementById('b-cust-name').value.trim();
+        const checkIn = document.getElementById('b-checkin').value;
+        const checkOut = document.getElementById('b-checkout').value;
+        const dpMethod = document.getElementById('b-dp-method').value;
+        const form = document.getElementById('booking-form');
+        const editingId = form.getAttribute('data-editing-id');
+
+        if (!customerName || new Date(checkIn) >= new Date(checkOut)) {
+            showModal("Input Gagal", "Pastikan Nama dan Tanggal (Check-out > Check-in) benar!", "error");
+            return;
+        }
+
+        const items = [];
+        let validVillasSelected = true;
+        let demandedStocks = {};
+
+        document.querySelectorAll('.villa-item-row').forEach(row => {
+            const villaId = row.querySelector('.villa-select').value;
+            const qty = parseInt(row.querySelector('.villa-qty').value) || 0;
+            const price = parseFloat(row.querySelector('.villa-price').value) || 0;
+
+            if (!villaId) { validVillasSelected = false; return; }
+
+            demandedStocks[villaId] = (demandedStocks[villaId] || 0) + qty;
+            items.push({ villaId: villaId, qty: qty, pricePaid: price });
+        });
+
+        if (items.length === 0 || !validVillasSelected) {
+            showModal("Pesanan Kosong", "Pilih minimal 1 Tipe Villa!", "warning");
+            return;
+        }
+
+        let stockCheckOk = true;
+        let failingVillaName = "";
+        for (const villaId in demandedStocks) {
+            const neededQty = demandedStocks[villaId];
+            if (!isStockAvailable(villaId, neededQty, checkIn, checkOut, editingId)) {
+                stockCheckOk = false;
+                const vObj = villas.find(v => v.id === villaId);
+                failingVillaName = vObj ? vObj.name : "Villa Pilihan";
+                break;
+            }
+        }
+
+        if (!stockCheckOk) {
+            showModal("Kuota Penuh!", `Maaf, kamar ${failingVillaName} tidak memiliki sisa kuota yang cukup pada tanggal tersebut!`, "error");
+            return;
+        }
+
+        const addons = [];
+        document.querySelectorAll('.addon-item-row').forEach(row => {
+            const addName = row.querySelector('.addon-name').value.trim();
+            const addPrice = parseFloat(row.querySelector('.addon-price').value) || 0;
+            if (addName) addons.push({ name: addName, price: addPrice });
+        });
+
+        const calc = calculateTotalSummary();
+        const bookingId = editingId ? editingId : 'b-' + Date.now();
+
+        const newBooking = {
+            id: bookingId,
+            customerName,
+            checkIn,
+            checkOut,
+            items,
+            addons,
+            discount: calc.discount,
+            dp: calc.dp,
+            dpPaymentMethod: dpMethod,
+            totalPrice: calc.grandTotal,
+            createdAt: new Date().toISOString()
+        };
+
+        const res = await apiRequest('save_booking', newBooking);
+
+        if (res && res.status === 'success') {
+            form.removeAttribute('data-editing-id');
+            showModal("Sukses Menyimpan!", `Pesanan atas nama <strong>${customerName}</strong> berhasil disimpan.`, "success", () => {
+                resetBookingForm();
+                loadAllDataFromMySQL().then(() => {
+                    switchTab('reservasi');
+                });
+            });
+        } else {
+            showModal("Gagal Menyimpan", res.message || "Gagal upload transaksi", "error");
+        }
+    }
+
+    // --- STREAMING_CHUNK:Defining Edit Modal Functionality ---
+    function addEditVillaRow(villaId = "", qty = 1, price = null) {
+        const container = document.getElementById('edit-villa-rows-container');
+        const rowId = 'edit-villa-row-' + Date.now() + Math.floor(Math.random() * 100);
+
+        let selectOptions = `<option value="" disabled selected>-- Pilih Jenis Kamar --</option>`;
+        villas.forEach(v => {
+            selectOptions += `<option value="${v.id}" ${v.id === villaId ? 'selected' : ''}>${v.name} (Rp ${parseFloat(v.price).toLocaleString('id-ID')})</option>`;
+        });
+
+        const rowHTML = `
+            <div id="${rowId}" class="edit-villa-item-row flex items-stretch gap-2 bg-white border border-slate-200 p-2.5 rounded-xl">
+                <div class="flex-1">
+                    <select onchange="updateEditRowPrice('${rowId}')" required class="edit-villa-select w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500">
+                        ${selectOptions}
+                    </select>
+                </div>
+                <div class="w-16 shrink-0">
+                    <input type="number" oninput="calculateEditTotalSummary()" value="${qty}" min="1" required class="edit-villa-qty w-full px-1 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 text-center">
+                </div>
+                <div class="flex-1 shrink-0 relative">
+                    <span class="absolute inset-y-0 left-0 pl-2 flex items-center text-slate-400 text-[10px]">Rp</span>
+                    <input type="number" oninput="calculateEditTotalSummary()" value="${price !== null ? price : ''}" required class="edit-villa-price w-full pl-6 pr-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500">
+                </div>
+                <button type="button" onclick="removeEditVillaRow('${rowId}')" class="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition-all self-center" title="Hapus">
+                    <i class="fa-solid fa-xmark text-sm"></i>
+                </button>
+            </div>
+        `;
+        container.insertAdjacentHTML('beforeend', rowHTML);
+
+        if (price === null && villaId !== "") updateEditRowPrice(rowId);
+        else calculateEditTotalSummary();
+    }
+
+    function removeEditVillaRow(rowId) {
+        const row = document.getElementById(rowId);
+        if (row) {
+            row.remove();
+            calculateEditTotalSummary();
+        }
+    }
+
+    function updateEditRowPrice(rowId) {
+        const row = document.getElementById(rowId);
+        const villaId = row.querySelector('.edit-villa-select').value;
+        const priceInput = row.querySelector('.edit-villa-price');
+        const villaObj = villas.find(v => v.id === villaId);
+        
+        if (villaObj) priceInput.value = parseInt(villaObj.price);
+        calculateEditTotalSummary();
+    }
+
+    function addEditAddonRow(name = "", price = "") {
+        const container = document.getElementById('edit-addon-rows-container');
+        const rowId = 'edit-addon-row-' + Date.now() + Math.floor(Math.random() * 100);
+
+        const rowHTML = `
+            <div id="${rowId}" class="edit-addon-item-row flex items-stretch gap-2 bg-white border border-slate-200 p-2.5 rounded-xl">
+                <div class="flex-1">
+                    <input type="text" value="${name}" placeholder="Nama Layanan" required class="edit-addon-name w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500">
+                </div>
+                <div class="flex-1 relative">
+                    <span class="absolute inset-y-0 left-0 pl-2 flex items-center text-slate-400 text-[10px]">Rp</span>
+                    <input type="number" value="${price}" oninput="calculateEditTotalSummary()" placeholder="0" required class="edit-addon-price w-full pl-6 pr-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500">
+                </div>
+                <button type="button" onclick="removeEditAddonRow('${rowId}')" class="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition-all self-center" title="Hapus">
+                    <i class="fa-solid fa-xmark text-sm"></i>
+                </button>
+            </div>
+        `;
+        container.insertAdjacentHTML('beforeend', rowHTML);
+        calculateEditTotalSummary();
+    }
+
+    function removeEditAddonRow(rowId) {
+        const row = document.getElementById(rowId);
+        if (row) {
+            row.remove();
+            calculateEditTotalSummary();
+        }
+    }
+
+    function calculateEditTotalSummary() {
+        const checkIn = document.getElementById('edit-b-checkin').value;
+        const checkOut = document.getElementById('edit-b-checkout').value;
+
+        let nights = 1;
+        if (checkIn && checkOut && new Date(checkIn) < new Date(checkOut)) {
+            nights = Math.ceil((new Date(checkOut) - new Date(checkIn)) / (1000 * 60 * 60 * 24));
+        }
+
+        let villaTotal = 0;
+        document.querySelectorAll('.edit-villa-item-row').forEach(row => {
+            const qty = parseInt(row.querySelector('.edit-villa-qty').value) || 0;
+            const price = parseFloat(row.querySelector('.edit-villa-price').value) || 0;
+            villaTotal += (qty * price) * nights;
+        });
+
+        let addonTotal = 0;
+        document.querySelectorAll('.edit-addon-item-row').forEach(row => {
+            const price = parseFloat(row.querySelector('.edit-addon-price').value) || 0;
+            addonTotal += price;
+        });
+
+        const discount = parseFloat(document.getElementById('edit-b-discount').value) || 0;
+        const dp = parseFloat(document.getElementById('edit-b-dp').value) || 0;
+
+        const subtotal = villaTotal + addonTotal;
+        const grandTotal = Math.max(0, subtotal - discount);
+        const remaining = Math.max(0, grandTotal - dp);
+
+        document.getElementById('edit-inv-villa-total').innerText = "Rp " + villaTotal.toLocaleString('id-ID');
+        document.getElementById('edit-inv-addon-total').innerText = "Rp " + addonTotal.toLocaleString('id-ID');
+        document.getElementById('edit-inv-grand-total').innerText = "Rp " + grandTotal.toLocaleString('id-ID');
+        document.getElementById('edit-inv-remaining-total').innerText = "Rp " + remaining.toLocaleString('id-ID');
+
+        return { subtotal, grandTotal, remaining, discount, dp, villaTotal, addonTotal, nights };
+    }
+
+    async function submitEditBooking(e) {
+        e.preventDefault();
+        
+        const editingId = document.getElementById('edit-booking-id').value;
+        const customerName = document.getElementById('edit-b-cust-name').value.trim();
+        const checkIn = document.getElementById('edit-b-checkin').value;
+        const checkOut = document.getElementById('edit-b-checkout').value;
+        const dpMethod = document.getElementById('edit-b-dp-method').value;
+
+        if (!customerName || new Date(checkIn) >= new Date(checkOut)) {
+            showModal("Input Gagal", "Pastikan Nama dan Tanggal (Check-out > Check-in) benar!", "error");
+            return;
+        }
+
+        const items = [];
+        let demandedStocks = {};
+
+        document.querySelectorAll('.edit-villa-item-row').forEach(row => {
+            const villaId = row.querySelector('.edit-villa-select').value;
+            const qty = parseInt(row.querySelector('.edit-villa-qty').value) || 0;
+            const price = parseFloat(row.querySelector('.edit-villa-price').value) || 0;
+
+            if (villaId) {
+                demandedStocks[villaId] = (demandedStocks[villaId] || 0) + qty;
+                items.push({ villaId: villaId, qty: qty, pricePaid: price });
+            }
+        });
+
+        if (items.length === 0) {
+            showModal("Pesanan Kosong", "Pilih minimal 1 Tipe Villa!", "warning");
+            return;
+        }
+
+        let stockCheckOk = true;
+        let failingVillaName = "";
+        for (const villaId in demandedStocks) {
+            const neededQty = demandedStocks[villaId];
+            if (!isStockAvailable(villaId, neededQty, checkIn, checkOut, editingId)) {
+                stockCheckOk = false;
+                const vObj = villas.find(v => v.id === villaId);
+                failingVillaName = vObj ? vObj.name : "Kamar";
+                break;
+            }
+        }
+
+        if (!stockCheckOk) {
+            showModal("Kuota Penuh!", `Maaf, stok kamar <strong>${failingVillaName}</strong> tidak mencukupi untuk update tanggal/kuota tersebut.`, "error");
+            return;
+        }
+
+        const addons = [];
+        document.querySelectorAll('.edit-addon-item-row').forEach(row => {
+            const addName = row.querySelector('.edit-addon-name').value.trim();
+            const addPrice = parseFloat(row.querySelector('.edit-addon-price').value) || 0;
+            if (addName) addons.push({ name: addName, price: addPrice });
+        });
+
+        const calc = calculateEditTotalSummary();
+        const existingBooking = bookings.find(b => b.id === editingId);
+
+        const updatedBooking = {
+            id: editingId,
+            customerName,
+            checkIn,
+            checkOut,
+            items,
+            addons,
+            discount: calc.discount,
+            dp: calc.dp,
+            dpPaymentMethod: dpMethod,
+            totalPrice: calc.grandTotal,
+            createdAt: existingBooking ? existingBooking.createdAt : new Date().toISOString()
+        };
+
+        const res = await apiRequest('save_booking', updatedBooking);
+
+        if (res && res.status === 'success') {
+            closeEditBookingModal();
+            showModal("Berhasil!", `Reservasi <strong>#${editingId}</strong> berhasil diperbarui.`, "success", () => {
+                loadAllDataFromMySQL().then(() => {
+                    loadFilteredReservations();
+                });
+            });
+        } else {
+            showModal("Gagal Update", res.message || "Gagal update transaksi", "error");
+        }
+    }
+
+
+    // --- STREAMING_CHUNK:Defining Invoice & Pay Helpers ---
+    function setLunas(bookingId) {
+        const booking = bookings.find(b => b.id === bookingId);
+        if (!booking) return;
+
+        const remains = booking.totalPrice - booking.dp;
+        
+        const htmlBody = `
+            <div class="text-left">
+                <p class="text-xs text-slate-500 mb-4 text-center">Yakin ingin melunasi sisa tagihan <strong>${booking.customerName}</strong> sebesar <strong class="text-slate-800 bg-slate-100 px-1 rounded">Rp ${remains.toLocaleString('id-ID')}</strong>?</p>
+                
+                <div class="bg-slate-50 border border-slate-200 p-3 rounded-xl">
+                    <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-2">Metode Pelunasan</label>
+                    <select id="modal-lunas-method" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all font-medium">
+                        <option value="Cash">Cash (Uang Tunai)</option>
+                        <option value="Transfer">Transfer Bank / E-Wallet</option>
+                    </select>
+                </div>
+            </div>
+        `;
+
+        showModal("Konfirmasi Pelunasan", htmlBody, "info", async () => {
+                const method = document.getElementById('modal-lunas-method').value;
+                const res = await apiRequest('set_lunas', { id: bookingId, method: method });
+                
+                if (res && res.status === 'success') {
+                    showModal("Berhasil Lunas!", "Status pembayaran diperbarui menjadi LUNAS.", "success");
+                    await loadAllDataFromMySQL();
+                } else {
+                    showModal("Gagal", res.message || "Gagal melakukan pelunasan.", "error");
+                }
+            }, () => {}
+        );
+    }
+
+    function cetakInvoice(bookingId) {
+        const booking = bookings.find(b => b.id === bookingId);
+        if (!booking) return;
+
+        const remains = Math.max(0, booking.totalPrice - booking.dp);
+        const status = remains <= 0 ? 'LUNAS' : 'BELUM LUNAS';
+        const statusColor = remains <= 0 ? '#10b981' : '#f43f5e';
+        const bNights = Math.ceil((new Date(booking.checkOut) - new Date(booking.checkIn)) / (1000 * 60 * 60 * 24));
+
+        let itemsHtml = '';
+        let itemIndex = 1;
+        
+        booking.items.forEach(it => {
+            const v = villas.find(vl => vl.id === it.villaId);
+            const vName = v ? v.name : 'Sewa Kamar / Villa';
+            const subtotal = it.qty * it.pricePaid * bNights;
+            itemsHtml += `
+                <tr class="border-b border-slate-200/60">
+                    <td class="py-3 px-2 text-center">${itemIndex++}</td>
+                    <td class="py-3 font-semibold text-slate-800">${vName} (${bNights} Malam)</td>
+                    <td class="py-3 text-center">${it.qty}</td>
+                    <td class="py-3 text-right">Rp ${parseFloat(it.pricePaid).toLocaleString('id-ID')}</td>
+                    <td class="py-3 px-2 text-right font-bold text-slate-800">Rp ${subtotal.toLocaleString('id-ID')}</td>
+                </tr>
+            `;
+        });
+
+        if (booking.addons && booking.addons.length > 0) {
+            booking.addons.forEach(ad => {
+                itemsHtml += `
+                    <tr class="border-b border-slate-200/60">
+                        <td class="py-3 px-2 text-center">${itemIndex++}</td>
+                        <td class="py-3 text-slate-600">Layanan Tambahan: ${ad.name}</td>
+                        <td class="py-3 text-center">1</td>
+                        <td class="py-3 text-right">Rp ${parseFloat(ad.price).toLocaleString('id-ID')}</td>
+                        <td class="py-3 px-2 text-right font-bold text-slate-800">Rp ${parseFloat(ad.price).toLocaleString('id-ID')}</td>
+                    </tr>
+                `;
+            });
+        }
+
+        let discountHtmlBlock = '';
+        if (parseFloat(booking.discount) > 0) {
+            discountHtmlBlock = `
+                <div class="flex justify-between py-2 border-b border-slate-100 text-sm text-rose-600">
+                    <span class="font-semibold">Potongan Diskon</span>
+                    <span class="font-bold">- Rp ${parseFloat(booking.discount).toLocaleString('id-ID')}</span>
+                </div>
+            `;
+        }
+
+        const logoHtml = settings.villaLogo 
+            ? `<img src="${settings.villaLogo}" style="max-height: 80px; width: auto; object-fit: contain;">` 
+            : `<div style="display:inline-flex; align-items:center; justify-content:center; width:64px; height:64px; background-color:#ecfdf5; color:#059669; border-radius:16px; font-size:32px; font-weight:bold;">V</div>`;
+        
+        const today = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+
+        const htmlContent = `
+            <!DOCTYPE html>
+            <html lang="id">
+            <head>
+                <meta charset="UTF-8">
+                <title>Invoice - ${booking.customerName} - ${booking.id}</title>
+                <script src="https://cdn.tailwindcss.com"><\/script>
+                <style>
+                    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+                    body { font-family: 'Inter', sans-serif; background: #f8fafc; }
+                    @media print {
+                        body { background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+                        @page { size: A4; margin: 15mm; }
+                        .no-print { display: none !important; }
+                        .print-shadow { box-shadow: none !important; border: none !important; }
+                    }
+                    .watermark {
+                        position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-35deg);
+                        font-size: 120px; font-weight: 900; color: ${statusColor}; opacity: 0.08; pointer-events: none; z-index: 0; letter-spacing: 0.1em;
+                    }
+                </style>
+            </head>
+            <body class="p-8 flex justify-center">
+                <div class="bg-white max-w-[210mm] w-full min-h-[297mm] relative print-shadow shadow-2xl rounded-sm p-10 border border-slate-200">
+                    <div class="watermark">${status}</div>
+                    <div class="relative z-10">
+                        <div class="flex justify-between items-center border-b-2 border-slate-800 pb-8 mb-8">
+                            <div class="flex items-center gap-5">
+                                ${logoHtml}
+                                <div>
+                                    <h1 class="text-xl font-extrabold text-slate-900 uppercase tracking-tight">${settings.villaName}</h1>
+                                    <p class="text-sm text-slate-500 font-medium mt-1">Jalan Pengangsingan Area Sada 360 Sembalun - Lombok Timur  Telepon 0823-4255-9442</p>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <h2 class="text-4xl font-black text-emerald-800 tracking-widest">INVOICE</h2>
+                                <p class="text-sm font-bold text-slate-600 mt-2 tracking-widest uppercase">#${booking.id}</p>
+                            </div>
+                        </div>
+
+                        <div class="flex justify-between items-start mb-10">
+                            <div>
+                                <p class="text-xs text-slate-400 font-bold uppercase tracking-wider mb-2">Ditujukan Kepada:</p>
+                                <p class="text-xl font-bold text-slate-900 mb-1">${booking.customerName}</p>
+                            </div>
+                            <div class="text-right text-sm">
+                                <table class="ml-auto text-slate-700">
+                                    <tr><td class="pr-4 py-1 text-slate-400 font-semibold text-xs uppercase text-right">Tanggal Cetak</td><td class="font-bold text-right">${today}</td></tr>
+                                    <tr><td class="pr-4 py-1 text-slate-400 font-semibold text-xs uppercase text-right">Check-In</td><td class="font-bold text-right">${booking.checkIn}</td></tr>
+                                    <tr><td class="pr-4 py-1 text-slate-400 font-semibold text-xs uppercase text-right">Check-Out</td><td class="font-bold text-right">${booking.checkOut}</td></tr>
+                                    <tr><td class="pr-4 py-1 text-slate-400 font-semibold text-xs uppercase text-right">Durasi</td><td class="font-bold text-right">${bNights} Malam</td></tr>
+                                </table>
+                            </div>
+                        </div>
+
+                        <table class="w-full text-left mb-10 border-collapse">
+                            <thead>
+                                <tr class="bg-slate-100 text-slate-600 text-[11px] uppercase tracking-wider font-bold">
+                                    <th class="py-3 px-2 text-center rounded-tl-lg w-12">No</th>
+                                    <th class="py-3">Deskripsi Layanan / Kamar</th>
+                                    <th class="py-3 text-center">Qty</th>
+                                    <th class="py-3 text-right">Harga Satuan</th>
+                                    <th class="py-3 px-2 text-right rounded-tr-lg">Subtotal</th>
+                                </tr>
+                            </thead>
+                            <tbody class="text-sm">
+                                ${itemsHtml}
+                            </tbody>
+                        </table>
+
+                        <div class="flex justify-end mb-16">
+                            <div class="w-7/12 sm:w-1/2">
+                                <div class="flex justify-between py-2 border-b border-slate-100 text-sm">
+                                    <span class="text-slate-600 font-semibold">Total Biaya (Gross)</span>
+                                    <span class="font-bold text-slate-800">Rp ${(parseFloat(booking.totalPrice) + parseFloat(booking.discount)).toLocaleString('id-ID')}</span>
+                                </div>
+                                ${discountHtmlBlock}
+                                <div class="flex justify-between py-2.5 border-b-2 border-slate-800 text-base">
+                                    <span class="font-extrabold text-slate-900">GRAND TOTAL</span>
+                                    <span class="font-extrabold text-slate-900">Rp ${parseFloat(booking.totalPrice).toLocaleString('id-ID')}</span>
+                                </div>
+                                <div class="flex justify-between py-2 border-b border-slate-100 text-sm text-emerald-700">
+                                    <span class="font-semibold">Telah Dibayar (Uang Muka)</span>
+                                    <span class="font-bold">Rp ${parseFloat(booking.dp).toLocaleString('id-ID')}</span>
+                                </div>
+                                <div class="flex justify-between py-3 mt-1 bg-slate-50 px-3 rounded-lg">
+                                    <span class="font-bold text-slate-900 uppercase tracking-wider text-xs self-center">Sisa Tagihan</span>
+                                    <span class="font-black text-xl ${remains <= 0 ? 'text-emerald-600' : 'text-rose-600'}">Rp ${remains.toLocaleString('id-ID')}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="flex justify-between items-end pt-8">
+                            <div class="w-1/2">
+                                <p class="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">Catatan Tambahan:</p>
+                                <p class="text-xs text-slate-500 leading-relaxed pr-8">Terima kasih atas kepercayaannya. Harap simpan tanda terima ini sebagai bukti sah.</p>
+                            </div>
+                            <div class="w-1/2 text-center pl-8">
+                                <p class="text-sm text-slate-600 mb-20">Hormat Kami,</p>
+                                <div class="inline-block border-b border-slate-400 px-6 pb-1">
+                                    <p class="text-sm font-extrabold text-slate-800">Management ${settings.villaName}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <button onclick="window.print()" class="no-print fixed bottom-8 right-8 bg-slate-800 hover:bg-slate-700 text-white shadow-xl px-6 py-4 rounded-full font-bold text-sm flex items-center gap-2 transition-all hover:scale-105 active:scale-95">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
+                    Simpan PDF / Cetak Invoice
+                </button>
+            </body>
+            </html>
+        `;
+
+        const printWindow = window.open('', '_blank');
+        printWindow.document.open();
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+        setTimeout(() => { printWindow.focus(); }, 500);
+    }
+
+    // --- STREAMING_CHUNK:Defining Reservation Views ---
+    function setResPeriodFilter(period) {
+        const today = new Date();
+        let start = new Date(), end = new Date();
+
+        document.querySelectorAll('.res-period-btn').forEach(btn => btn.classList.remove('bg-white', 'text-emerald-800', 'shadow-sm'));
+        document.getElementById('btn-res-' + period).classList.add('bg-white', 'text-emerald-800', 'shadow-sm');
+
+        if (period === 'hari') {
+            const todayStr = today.toISOString().split('T')[0];
+            document.getElementById('res-start-date').value = todayStr;
+            document.getElementById('res-end-date').value = todayStr;
+        } else if (period === 'minggu') {
+            start.setDate(today.getDate() - 7);
+            document.getElementById('res-start-date').value = start.toISOString().split('T')[0];
+            document.getElementById('res-end-date').value = today.toISOString().split('T')[0];
+        } else if (period === 'bulan') {
+            start = new Date(today.getFullYear(), today.getMonth(), 1);
+            end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+            document.getElementById('res-start-date').value = start.toISOString().split('T')[0];
+            document.getElementById('res-end-date').value = end.toISOString().split('T')[0];
+        }
+        loadFilteredReservations();
+    }
+
+    function loadFilteredReservations() {
+        const startStr = document.getElementById('res-start-date').value;
+        const endStr = document.getElementById('res-end-date').value;
+        if (!startStr || !endStr) return;
+
+        const activeBookingsInPeriod = bookings.filter(b => b.checkIn <= endStr && b.checkOut >= startStr);
+        const listContainer = document.getElementById('reservasi-container');
+        listContainer.innerHTML = "";
+
+        if (activeBookingsInPeriod.length === 0) {
+            listContainer.innerHTML = `
+                <div class="text-center py-8 border border-dashed border-slate-200 rounded-2xl bg-slate-50/50">
+                    <span class="p-2.5 bg-slate-100 text-slate-400 rounded-full inline-block mb-2"><i class="fa-solid fa-calendar-minus text-xl"></i></span>
+                    <h5 class="font-bold text-slate-800 text-sm">Tidak Ada Booking di Periode Filter Ini</h5>
+                </div>
+            `;
+        } else {
+            const todayStr = new Date().toISOString().split('T')[0];
+            
+            // Mengurutkan berdasarkan tanggal Check-In
+            activeBookingsInPeriod.sort((a, b) => a.checkIn.localeCompare(b.checkIn));
+
+            // Mengelompokkan berdasarkan tanggal Check-In
+            const groupedBookings = {};
+            activeBookingsInPeriod.forEach(b => {
+                if (!groupedBookings[b.checkIn]) {
+                    groupedBookings[b.checkIn] = [];
+                }
+                groupedBookings[b.checkIn].push(b);
+            });
+
+            // Render HTML per kelompok tanggal
+            for (const date in groupedBookings) {
+                const formattedDate = formatTanggalIndo(date);
+                const isTodayGroup = date === todayStr;
+
+                let groupHTML = `
+                    <div class="mb-6 bg-slate-50/40 p-4 rounded-2xl border ${isTodayGroup ? 'border-amber-300 shadow-sm ring-1 ring-amber-100' : 'border-slate-200'}">
+                        <div class="flex items-center gap-2 mb-4 border-b border-slate-200/60 pb-2">
+                            <i class="fa-regular fa-calendar-check ${isTodayGroup ? 'text-amber-600' : 'text-slate-500'}"></i>
+                            <h4 class="font-bold text-slate-800 text-sm">Check-In: ${formattedDate} ${isTodayGroup ? '<span class="text-amber-600 ml-1 font-extrabold">(Hari Ini)</span>' : ''}</h4>
+                        </div>
+                        <div class="space-y-4">
+                `;
+
+                groupedBookings[date].forEach(booking => {
+                    const bNights = Math.ceil((new Date(booking.checkOut) - new Date(booking.checkIn)) / (1000 * 60 * 60 * 24));
+                    const isPast = booking.checkOut < todayStr;
+                    
+                    let roomDetails = "";
+                    // Loop Kamar
+                    booking.items.forEach(item => {
+                        const v = villas.find(vl => vl.id === item.villaId);
+                        roomDetails += `<span class="inline-block bg-slate-100 text-slate-700 text-[10px] px-2 py-0.5 rounded font-semibold border border-slate-200/50 mr-1 mt-1">${v ? v.name : 'Unknown'} (x${item.qty})</span> `;
+                    });
+                    
+                    // Loop Addon untuk Detail Reservasi
+                    if(booking.addons && booking.addons.length > 0) {
+                        booking.addons.forEach(ad => {
+                            roomDetails += `<span class="inline-block bg-amber-50 text-amber-700 text-[10px] px-2 py-0.5 rounded font-semibold border border-amber-200/50 mr-1 mt-1"><i class="fa-solid fa-plus text-[8px] mr-1"></i>${ad.name}</span> `;
+                        });
+                    }
+
+                    const remains = Math.max(0, booking.totalPrice - booking.dp);
+                    
+                    // Logika Dinamis Status Badge
+                    let statusBadge = "";
+                    let cardStyle = "bg-white border-emerald-100 shadow-sm";
+
+                    if (todayStr === booking.checkIn) {
+                        statusBadge = `<span class="text-[9px] bg-amber-100 text-amber-700 font-bold px-2 py-0.5 rounded uppercase"><i class="fa-solid fa-plane-arrival mr-1"></i>Check-In Hari Ini (${bNights} Malam)</span>`;
+                        cardStyle = "bg-amber-50/40 border-amber-200";
+                    } else if (todayStr === booking.checkOut) {
+                        statusBadge = `<span class="text-[9px] bg-rose-100 text-rose-700 font-bold px-2 py-0.5 rounded uppercase"><i class="fa-solid fa-plane-departure mr-1"></i>Check-Out Hari Ini</span>`;
+                        cardStyle = "bg-rose-50/40 border-rose-200";
+                    } else if (todayStr > booking.checkIn && todayStr < booking.checkOut) {
+                        statusBadge = `<span class="text-[9px] bg-blue-100 text-blue-700 font-bold px-2 py-0.5 rounded uppercase"><i class="fa-solid fa-bed mr-1"></i>Sedang Menginap</span>`;
+                        cardStyle = "bg-blue-50/40 border-blue-200";
+                    } else if (todayStr < booking.checkIn) {
+                        statusBadge = `<span class="text-[9px] bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded uppercase"><i class="fa-solid fa-clock mr-1"></i>Akan Datang (${bNights} Malam)</span>`;
+                    } else {
+                        statusBadge = `<span class="text-[9px] bg-slate-200 text-slate-500 font-bold px-2 py-0.5 rounded uppercase"><i class="fa-solid fa-clock-rotate-left mr-1"></i>History / Selesai</span>`;
+                        cardStyle = "opacity-75 bg-slate-50 border-slate-200";
+                    }
+
+                    groupHTML += `
+                        <div class="border rounded-2xl p-4 hover:border-slate-300 transition-all relative overflow-hidden text-xs ${cardStyle}">
+                            <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                <div class="space-y-1.5 flex-1 min-w-0">
+                                    <div class="flex items-center gap-2 flex-wrap">
+                                        ${!isPast && todayStr >= booking.checkIn ? '<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>' : ''}
+                                        <h4 class="font-bold text-slate-900 text-sm">${booking.customerName}</h4>
+                                        ${statusBadge}
+                                    </div>
+                                    <div class="text-[11px] text-slate-500 flex flex-wrap gap-x-3 font-medium">
+                                        <span><i class="fa-solid fa-calendar ${isPast ? 'text-slate-400' : 'text-emerald-600'} mr-1"></i>Periode: <strong>${formatTanggalIndo(booking.checkIn)}</strong> s/d <strong>${formatTanggalIndo(booking.checkOut)}</strong></span>
+                                    </div>
+                                    <div class="flex flex-wrap items-center mt-1">
+                                        <span class="text-[10px] text-slate-400 font-bold uppercase mr-2 mt-1">Detail:</span>
+                                        ${roomDetails}
+                                    </div>
+                                </div>
+
+                                <div class="md:text-right border-t md:border-t-0 border-slate-100 pt-3 md:pt-0 flex md:flex-col justify-between items-center md:items-end gap-3 shrink-0">
+                                    <div>
+                                        <p class="text-sm font-extrabold text-slate-800">Rp ${parseFloat(booking.totalPrice).toLocaleString('id-ID')}</p>
+                                        <div class="flex gap-2 text-[10px] mt-0.5 font-semibold">
+                                            <span class="text-emerald-600">DP: Rp ${parseFloat(booking.dp).toLocaleString('id-ID')}</span>
+                                            <span class="${remains > 0 ? 'text-amber-600' : 'text-slate-500'}">Sisa: Rp ${parseFloat(remains).toLocaleString('id-ID')}</span>
+                                        </div>
+                                    </div>
+
+                                    <div class="flex gap-1.5 flex-wrap justify-end mt-1">
+                                        <button onclick="cetakInvoice('${booking.id}')" class="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 font-semibold text-[10px] rounded-lg transition-all"><i class="fa-solid fa-print"></i> Invoice</button>
+                                        ${remains > 0 ? `<button onclick="setLunas('${booking.id}')" class="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-semibold text-[10px] rounded-lg transition-all"><i class="fa-solid fa-check-double"></i> Lunas</button>` : ''}
+                                        <button onclick="openEditBookingModal('${booking.id}')" class="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-semibold text-[10px] rounded-lg transition-all"><i class="fa-regular fa-pen-to-square"></i> Edit</button>
+                                        <button onclick="confirmDeleteBooking('${booking.id}')" class="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 font-semibold text-[10px] rounded-lg transition-all"><i class="fa-regular fa-trash-can"></i> Hapus</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                groupHTML += `</div></div>`;
+                listContainer.insertAdjacentHTML('beforeend', groupHTML);
+            }
+        }
+        
+        // Panggil agenda di bawahnya untuk melihat grid dari bulan yang dipilih di start date
+        const [y, m, d] = startStr.split('-');
+        renderMonthlyAgenda(y, m);
+    }
+
+    // --- STREAMING_CHUNK:Rendering Public Monitor with Details ---
+    function renderPublicMonthlyMonitor() {
+        const container = document.getElementById('public-7-days-monitor');
+        if (!container) return;
+        container.innerHTML = "";
+
+        const daysOfWeek = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+        const months = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = now.getMonth();
+        const todayStr = now.toISOString().split('T')[0];
+        const lastDay = new Date(year, month + 1, 0).getDate();
+        let hasAnyBooking = false;
+
+        document.getElementById('public-month-badge').innerText = `${months[month]} ${year}`;
+
+        for (let i = 1; i <= lastDay; i++) {
+            const tempDateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+            const tempDate = new Date(year, month, i);
+
+            const guestsOnThisDay = bookings.filter(b => b.checkIn <= tempDateStr && b.checkOut > tempDateStr);
+
+            if (guestsOnThisDay.length > 0) {
+                hasAnyBooking = true;
+                const displayDayName = daysOfWeek[tempDate.getDay()];
+                const isToday = tempDateStr === todayStr;
+
+                let guestsHTML = "";
+                // Sort guests: check-in first, then staying, then check-out
+                let sortedGuests = guestsOnThisDay.map(b => {
+                     let typeText = "";
+                     const bNights = Math.ceil((new Date(b.checkOut) - new Date(b.checkIn)) / (1000 * 60 * 60 * 24));
+                     let sortVal = 0;
+                     if (b.checkIn === tempDateStr) { typeText = `Check-In Hari Ini (${bNights} Malam)`; sortVal = 1; }
+                     else if (b.checkOut === tempDateStr) { typeText = `Check-Out Hari Ini`; sortVal = 3; }
+                     else { typeText = `Sedang Menginap`; sortVal = 2; }
+                     return { booking: b, text: typeText, sortVal: sortVal };
+                }).sort((a, b) => a.sortVal - b.sortVal);
+
+                sortedGuests.forEach(g => {
+                    const booking = g.booking;
+                    const remains = Math.max(0, booking.totalPrice - booking.dp);
+                    
+                    // Generate Details (Rooms + Addons)
+                    let detailsHTML = "";
+                    booking.items.forEach(item => {
+                        const v = villas.find(vl => vl.id === item.villaId);
+                        detailsHTML += `<div class="flex justify-between items-center py-1 border-b border-slate-50 last:border-0"><span class="text-slate-500"><i class="fa-solid fa-bed text-[9px] mr-1"></i> ${v ? v.name : 'Kamar'} (x${item.qty})</span></div>`;
+                    });
+                    if(booking.addons && booking.addons.length > 0) {
+                        booking.addons.forEach(ad => {
+                            detailsHTML += `<div class="flex justify-between items-center py-1 border-b border-slate-50 last:border-0"><span class="text-slate-500"><i class="fa-solid fa-plus text-[9px] mr-1"></i> Add-on: ${ad.name}</span></div>`;
+                        });
+                    }
+
+                    guestsHTML += `
+                        <div class="bg-white rounded-xl border border-slate-100 hover:border-emerald-100 hover:shadow-sm transition-all text-xs">
+                            <!-- Main Clickable Header -->
+                            <div class="p-3.5 flex items-center justify-between cursor-pointer" onclick="togglePublicDetails('${booking.id}')">
+                                <div class="flex-1 min-w-0 pr-3 flex items-center gap-3">
+                                    <button id="details-btn-${booking.id}" class="details-toggle w-6 h-6 rounded-full bg-slate-50 text-slate-400 flex items-center justify-center hover:bg-slate-100 transition-colors shrink-0">
+                                        <i class="fa-solid fa-chevron-down text-[10px]"></i>
+                                    </button>
+                                    <div>
+                                        <p class="font-bold text-slate-800 text-sm">${booking.customerName}</p>
+                                        <p class="text-[10px] text-emerald-600 font-semibold mt-0.5">${g.text}</p>
+                                    </div>
+                                </div>
+                                <div class="text-right shrink-0">
+                                    <p class="font-bold text-slate-900">Rp ${parseFloat(booking.totalPrice).toLocaleString('id-ID')}</p>
+                                    <p class="text-[10px] text-slate-400 mt-0.5">Sisa: Rp ${parseFloat(remains).toLocaleString('id-ID')}</p>
+                                </div>
+                            </div>
+                            <!-- Expandable Details Content -->
+                            <div id="details-content-${booking.id}" class="details-content border-slate-100 mx-3.5 pb-2">
+                                <p class="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Rincian Pesanan:</p>
+                                ${detailsHTML}
+                            </div>
+                        </div>
+                    `;
+                });
+
+                const highlightStyle = isToday ? 'border-amber-300 shadow-md ring-2 ring-amber-100' : 'border-slate-200';
+                const headerStyle = isToday ? 'bg-amber-50 border-amber-200' : 'bg-white border-slate-200';
+                
+                const dayCardHTML = `
+                    <div class="bg-slate-50 border rounded-2xl overflow-hidden ${highlightStyle} mb-4">
+                        <div class="${headerStyle} px-4 py-3 flex items-center justify-between border-b">
+                            <div class="flex items-center gap-2">
+                                <i class="fa-regular fa-calendar text-slate-600 text-sm"></i>
+                                <h5 class="font-bold text-slate-800 text-xs">${displayDayName}, ${i} ${months[month]} ${isToday ? '<span class="text-amber-600">(Hari Ini)</span>' : ''}</h5>
+                            </div>
+                        </div>
+                        <div class="p-3 space-y-2.5">${guestsHTML}</div>
+                    </div>
+                `;
+                container.insertAdjacentHTML('beforeend', dayCardHTML);
+            }
+        }
+
+        if (!hasAnyBooking) {
+            container.innerHTML = `<div class="text-slate-400 italic text-[11px] py-10 text-center bg-slate-50 rounded-xl border border-slate-100">Bulan ini masih kosong.</div>`;
+        }
+    }
+
+    // --- STREAMING_CHUNK:Rendering Monthly Agenda Monitor ---
+    function renderMonthlyAgenda(year, monthStr) {
+        const container = document.getElementById('monthly-agenda-monitor-container');
+        if (!container) return;
+        container.innerHTML = "";
+
+        const daysOfWeek = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+        const months = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+        const monthIdx = parseInt(monthStr) - 1;
+        const lastDay = new Date(year, monthIdx + 1, 0).getDate();
+        const todayStr = new Date().toISOString().split('T')[0];
+
+        let hasAnyBooking = false;
+
+        for (let i = 1; i <= lastDay; i++) {
+            const tempDateStr = `${year}-${String(monthIdx + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+            const tempDate = new Date(year, monthIdx, i);
+            const guestsOnThisDay = bookings.filter(b => b.checkIn <= tempDateStr && b.checkOut > tempDateStr);
+
+            if (guestsOnThisDay.length > 0) {
+                hasAnyBooking = true;
+                const isToday = tempDateStr === todayStr;
+                let rowsHTML = "";
+                guestsOnThisDay.forEach(booking => {
+                    const remains = Math.max(0, booking.totalPrice - booking.dp);
+                    rowsHTML += `
+                        <tr class="hover:bg-slate-50/75 border-b border-slate-100 transition-all">
+                            <td class="py-3 pl-3 font-bold text-slate-800 text-xs">${booking.customerName}</td>
+                            <td class="py-3 text-right font-semibold text-slate-700 text-[11px]">Rp ${parseFloat(booking.totalPrice).toLocaleString('id-ID')}</td>
+                            <td class="py-3 text-right font-semibold text-amber-600 text-[11px] pr-3">Rp ${parseFloat(remains).toLocaleString('id-ID')}</td>
+                        </tr>
+                    `;
+                });
+
+                const sectionHTML = `
+                    <div class="bg-white rounded-xl border ${isToday ? 'border-amber-300 shadow-md ring-1 ring-amber-100' : 'border-slate-200'} overflow-hidden shadow-sm">
+                        <div class="bg-slate-50 border-b border-slate-200 px-4 py-2.5 flex items-center justify-between">
+                            <h5 class="font-bold text-slate-800 text-xs">${daysOfWeek[tempDate.getDay()]}, ${i} ${months[monthIdx]} ${isToday ? '<span class="text-amber-600">(Hari Ini)</span>' : ''}</h5>
+                        </div>
+                        <table class="w-full text-left border-collapse">
+                            <tbody class="divide-y divide-slate-100">${rowsHTML}</tbody>
+                        </table>
+                    </div>
+                `;
+                container.insertAdjacentHTML('beforeend', sectionHTML);
+            }
+        }
+        if (!hasAnyBooking) {
+            container.innerHTML = `<div class="text-slate-400 italic text-[11px] py-10 text-center bg-slate-50 rounded-xl border border-slate-100">Kosong.</div>`;
+        }
+    }
+
+    function openEditBookingModal(bookingId) {
+        const booking = bookings.find(b => b.id === bookingId);
+        if (!booking) return;
+
+        // Populate Modal Fields
+        document.getElementById('edit-booking-id').value = booking.id;
+        document.getElementById('edit-modal-title-id').innerText = "#" + booking.id;
+        document.getElementById('edit-b-cust-name').value = booking.customerName;
+        document.getElementById('edit-b-checkin').value = booking.checkIn;
+        document.getElementById('edit-b-checkout').value = booking.checkOut;
+        document.getElementById('edit-b-discount').value = booking.discount;
+        document.getElementById('edit-b-dp').value = booking.dp;
+        document.getElementById('edit-b-dp-method').value = booking.dpPaymentMethod || 'None';
+
+        document.getElementById('edit-villa-rows-container').innerHTML = "";
+        document.getElementById('edit-addon-rows-container').innerHTML = "";
+
+        booking.items.forEach(it => addEditVillaRow(it.villaId, it.qty, it.pricePaid));
+        if (booking.addons) booking.addons.forEach(ad => addEditAddonRow(ad.name, ad.price));
+
+        calculateEditTotalSummary();
+        document.getElementById('edit-booking-modal').classList.remove('hidden');
+    }
+
+    function closeEditBookingModal() {
+        document.getElementById('edit-booking-modal').classList.add('hidden');
+    }
+
+    function confirmDeleteBooking(bookingId) {
+        const booking = bookings.find(b => b.id === bookingId);
+        if (!booking) return;
+
+        showModal("Hapus Booking?", `Hapus pesanan <strong>${booking.customerName}</strong>?`, "warning", async () => {
+            const res = await apiRequest('delete_booking', { id: bookingId });
+            if (res && res.status === 'success') {
+                showModal("Terhapus!", "Data booking dihapus.", "success");
+                await loadAllDataFromMySQL();
+            } else {
+                showModal("Gagal Hapus", res.message || "MySQL Error", "error");
+            }
+        }, () => {});
+    }
+
+    function renderVillasTable() {
+        const tbody = document.getElementById('villas-table-body');
+        tbody.innerHTML = "";
+        document.getElementById('total-villa-types-badge').innerText = `Total: ${villas.length} Jenis`;
+
+        villas.forEach(v => {
+            const tr = `
+                <tr class="border-b border-slate-100 hover:bg-slate-50/50">
+                    <td class="py-3.5 pl-2"><p class="font-bold text-slate-800 text-sm">${v.name}</p></td>
+                    <td class="py-3.5 text-right font-semibold text-slate-700">Rp ${parseFloat(v.price).toLocaleString('id-ID')}</td>
+                    <td class="py-3.5 text-center"><span class="inline-block px-2.5 py-1 bg-slate-100 text-slate-700 text-xs font-bold rounded-md">${v.stock} Kamar</span></td>
+                    <td class="py-3.5 text-right">
+                        <button onclick="loadVillaToEditor('${v.id}')" class="p-1.5 bg-amber-50 text-amber-700 rounded-lg"><i class="fa-solid fa-pen text-xs"></i></button>
+                        <button onclick="confirmDeleteVilla('${v.id}')" class="p-1.5 bg-rose-50 text-rose-700 rounded-lg"><i class="fa-solid fa-trash-can text-xs"></i></button>
+                    </td>
+                </tr>
+            `;
+            tbody.insertAdjacentHTML('beforeend', tr);
+        });
+    }
+
+    function loadVillaToEditor(villaId) {
+        const v = villas.find(vl => vl.id === villaId);
+        if (!v) return;
+
+        document.getElementById('editor-villa-id').value = v.id;
+        document.getElementById('editor-villa-name').value = v.name;
+        document.getElementById('editor-villa-price').value = parseInt(v.price);
+        document.getElementById('editor-villa-stock').value = v.stock;
+        document.getElementById('btn-cancel-edit-villa').classList.remove('hidden');
+    }
+
+    function resetVillaEditor() {
+        document.getElementById('villa-editor-form').reset();
+        document.getElementById('editor-villa-id').value = "";
+        document.getElementById('btn-cancel-edit-villa').classList.add('hidden');
+    }
+
+    async function saveVillaType(e) {
+        e.preventDefault();
+        const id = document.getElementById('editor-villa-id').value;
+        const name = document.getElementById('editor-villa-name').value.trim();
+        const price = parseFloat(document.getElementById('editor-villa-price').value) || 0;
+        const stock = parseInt(document.getElementById('editor-villa-stock').value) || 0;
+
+        const villaId = id ? id : 'v-' + Date.now();
+        const res = await apiRequest('save_villa', { id: villaId, name, price, stock });
+        if (res && res.status === 'success') {
+            showModal("Berhasil!", "Jenis villa disimpan.", "success");
+            resetVillaEditor();
+            await loadAllDataFromMySQL();
+        }
+    }
+
+    function confirmDeleteVilla(villaId) {
+        showModal("Hapus Jenis Villa?", "Lanjutkan?", "warning", async () => {
+            const res = await apiRequest('delete_villa', { id: villaId });
+            if (res && res.status === 'success') {
+                showModal("Terhapus!", "Jenis villa dihapus.", "success");
+                await loadAllDataFromMySQL();
+            } else {
+                showModal("Gagal", res.message, "error");
+            }
+        }, () => {});
+    }
+
+    // --- STREAMING_CHUNK:Defining Accounts Logic ---
+    function renderAccountsTable() {
+        const tbody = document.getElementById('accounts-table-body');
+        if (!tbody) return;
+        tbody.innerHTML = "";
+
+        accounts.forEach(acc => {
+            const tr = `
+                <tr class="border-b border-slate-100 hover:bg-slate-50/50">
+                    <td class="py-3.5 pl-2 font-bold text-slate-800">${acc.username}</td>
+                    <td class="py-3.5"><span class="px-2 py-1 rounded text-[10px] font-bold bg-slate-100 border border-slate-200">${acc.role || 'Kasir'}</span></td>
+                    <td class="py-3.5 text-slate-400 font-mono text-[11px]">••••••••</td>
+                    <td class="py-3.5 text-right">
+                        <button onclick="loadUserToEditor('${acc.id}')" class="p-1.5 bg-amber-50 text-amber-700 rounded-lg"><i class="fa-solid fa-pen text-[10px]"></i></button>
+                        <button onclick="confirmDeleteUser('${acc.id}')" class="p-1.5 bg-rose-50 text-rose-700 rounded-lg"><i class="fa-solid fa-trash-can text-[10px]"></i></button>
+                    </td>
+                </tr>
+            `;
+            tbody.insertAdjacentHTML('beforeend', tr);
+        });
+    }
+
+    function openAddUserForm() {
+        document.getElementById('user-editor-container').classList.remove('hidden');
+        document.getElementById('user-management-form').reset();
+        document.getElementById('manage-user-id').value = "";
+    }
+
+    function closeUserEditor() {
+        document.getElementById('user-editor-container').classList.add('hidden');
+    }
+
+    function loadUserToEditor(userId) {
+        const acc = accounts.find(a => a.id === userId);
+        if (!acc) return;
+        document.getElementById('user-editor-container').classList.remove('hidden');
+        document.getElementById('manage-user-id').value = acc.id;
+        document.getElementById('manage-username').value = acc.username;
+        document.getElementById('manage-password').value = acc.password;
+        document.getElementById('manage-role').value = acc.role || 'Kasir';
+    }
+
+    async function saveUserAccount(e) {
+        e.preventDefault();
+        const id = document.getElementById('manage-user-id').value;
+        const username = document.getElementById('manage-username').value.trim();
+        const password = document.getElementById('manage-password').value;
+        const role = document.getElementById('manage-role').value;
+
+        const userId = id ? id : 'u-' + Date.now();
+        const res = await apiRequest('save_account', { id: userId, username, password, role });
+        if (res && res.status === 'success') {
+            showModal("Berhasil!", "Akun disimpan.", "success");
+            closeUserEditor();
+            await loadAllDataFromMySQL();
+        }
+    }
+
+    function confirmDeleteUser(userId) {
+        showModal("Hapus Akun?", "Lanjutkan?", "warning", async () => {
+            const res = await apiRequest('delete_account', { id: userId });
+            if (res && res.status === 'success') {
+                showModal("Berhasil!", "Akun dihapus.", "success");
+                await loadAllDataFromMySQL();
+            }
+        }, () => {});
+    }
+
+    async function updateMyProfile(e) {
+        e.preventDefault();
+        const username = document.getElementById('my-username').value.trim();
+        const password = document.getElementById('my-password').value;
+
+        const res = await apiRequest('save_account', { id: currentUser.id, username, password, role: currentUser.role });
+        if (res && res.status === 'success') {
+            showModal("Sukses!", "Profil diperbarui.", "success");
+            await loadAllDataFromMySQL();
+        }
+    }
+
+    // --- STREAMING_CHUNK:Defining Financial Functions ---
+    let activeFilteredBookings = [];
+    function setPeriodFilter(period) {
+        const today = new Date();
+        let start = new Date(), end = new Date();
+
+        document.querySelectorAll('.period-btn').forEach(btn => btn.classList.remove('bg-white', 'text-emerald-800', 'shadow-sm'));
+        document.getElementById('btn-f-' + period).classList.add('bg-white', 'text-emerald-800', 'shadow-sm');
+
+        if (period === 'hari') {
+            const todayStr = today.toISOString().split('T')[0];
+            document.getElementById('fin-start-date').value = todayStr;
+            document.getElementById('fin-end-date').value = todayStr;
+        } else if (period === 'minggu') {
+            start.setDate(today.getDate() - 7);
+            document.getElementById('fin-start-date').value = start.toISOString().split('T')[0];
+            document.getElementById('fin-end-date').value = today.toISOString().split('T')[0];
+        } else if (period === 'bulan') {
+            start = new Date(today.getFullYear(), today.getMonth(), 1);
+            end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+            document.getElementById('fin-start-date').value = start.toISOString().split('T')[0];
+            document.getElementById('fin-end-date').value = end.toISOString().split('T')[0];
+        }
+        runFinancialReport();
+    }
+
+    function runFinancialReport() {
+        const startVal = document.getElementById('fin-start-date').value;
+        const endVal = document.getElementById('fin-end-date').value;
+        if (!startVal || !endVal) return;
+
+        const startDate = new Date(startVal);
+        const endDate = new Date(endVal);
+        endDate.setHours(23, 59, 59, 999);
+
+        activeFilteredBookings = bookings.filter(b => {
+            const checkInDate = new Date(b.checkIn);
+            return checkInDate >= startDate && checkInDate <= endDate;
+        });
+
+        let grossSum = 0, dpSum = 0, receivableSum = 0, discountSum = 0;
+        const tbody = document.getElementById('financial-table-body');
+        if (tbody) tbody.innerHTML = "";
+
+        activeFilteredBookings.forEach(b => {
+            grossSum += parseFloat(b.totalPrice);
+            dpSum += parseFloat(b.dp);
+            const remaining = Math.max(0, parseFloat(b.totalPrice) - parseFloat(b.dp));
+            receivableSum += remaining;
+            discountSum += parseFloat(b.discount);
+
+            if (tbody) {
+                const tr = `
+                    <tr class="border-b border-slate-100 hover:bg-slate-50/50">
+                        <td class="py-3 pl-2 font-bold text-slate-800">${b.customerName}</td>
+                        <td class="py-3 text-slate-600">${b.checkIn} s/d ${b.checkOut}</td>
+                        <td class="py-3 text-right font-semibold text-slate-800">Rp ${parseFloat(b.totalPrice).toLocaleString('id-ID')}</td>
+                        <td class="py-3 text-right font-semibold text-emerald-700">Rp ${parseFloat(b.dp).toLocaleString('id-ID')}</td>
+                        <td class="py-3 text-right font-semibold text-amber-600">Rp ${remaining.toLocaleString('id-ID')}</td>
+                    </tr>
+                `;
+                tbody.insertAdjacentHTML('beforeend', tr);
+            }
+        });
+
+        document.getElementById('fin-sum-gross').innerText = "Rp " + grossSum.toLocaleString('id-ID');
+        document.getElementById('fin-sum-dp').innerText = "Rp " + dpSum.toLocaleString('id-ID');
+        document.getElementById('fin-sum-receivable').innerText = "Rp " + receivableSum.toLocaleString('id-ID');
+        document.getElementById('fin-sum-discounts').innerText = "Rp " + discountSum.toLocaleString('id-ID');
+    }
+
+    function downloadFinancialReportCSV() {
+        if (activeFilteredBookings.length === 0) return;
+        const startVal = document.getElementById('fin-start-date').value;
+        const endVal = document.getElementById('fin-end-date').value;
+
+        let csvLines = ["ID Booking,Nama Pemesan,Check-In,Check-Out,Rincian Kamar,Total Transaksi (Rp),Metode DP,DP Terbayar (Rp),Metode Pelunasan,Sisa Tagihan (Rp),Potongan Diskon (Rp)"];
+
+        activeFilteredBookings.forEach(b => {
+            const remains = Math.max(0, parseFloat(b.totalPrice) - parseFloat(b.dp));
+            const dpMethod = b.dpPaymentMethod || 'None';
+            const lunasMethod = b.lunasPaymentMethod || 'None';
+            const row = [b.id, `"${b.customerName}"`, b.checkIn, b.checkOut, `""`, b.totalPrice, dpMethod, b.dp, lunasMethod, remains, b.discount];
+            csvLines.push(row.join(","));
+        });
+
+        const csvContent = "\uFEFF" + csvLines.join("\n");
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        link.setAttribute("href", URL.createObjectURL(blob));
+        link.setAttribute("download", `Laporan_Keuangan_${startVal}_sd_${endVal}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+</script>
+</body>
+</html>
